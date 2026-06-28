@@ -1,0 +1,9 @@
+services:
+  - type: worker
+    name: velocity-bingo-bot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: cd bot && python main.py
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
