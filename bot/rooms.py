@@ -82,7 +82,7 @@ async def handle_join_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     user = query.from_user
 
     data = query.data
-    room_id = int(data.split(":")[1])
+    room_id = data.split(":")[1]
 
     room = await db.get_room(room_id)
     if not room:
@@ -135,7 +135,7 @@ async def handle_cancel_room_callback(update: Update, context: ContextTypes.DEFA
     user = query.from_user
 
     data = query.data
-    room_id = int(data.split(":")[1])
+    room_id = data.split(":")[1]
 
     room = await db.get_room(room_id)
     if not room:

@@ -1,4 +1,3 @@
-import json
 import asyncio
 from typing import Optional
 
@@ -22,7 +21,7 @@ from utils import display_name_from_db, format_called_numbers
 
 
 def build_live_message(room: dict, p1: dict, p2: dict) -> str:
-    called = json.loads(room["called_numbers"])
+    called = room.get("called_numbers") or []
     called_str = format_called_numbers(called)
     p1_name = display_name_from_db(p1)
     p2_name = display_name_from_db(p2)
@@ -73,12 +72,11 @@ async def send_dm_card(
     is_my_turn_to_call: bool,
     need_to_mark: bool,
 ) -> bool:
-    """Send or update the interactive card in the player's DM. Returns True on success."""
     card = await db.get_card(room["id"], player_id)
     if not card:
         return False
 
-    called = json.loads(room["called_numbers"])
+    called = room.get("called_numbers") or []
     last_called = room.get("last_called_number")
 
     text = build_dm_card_text(
@@ -116,12 +114,8 @@ async def send_dm_card(
                 return True
             except BadRequest:
                 pass
-
         msg = await context.bot.send_message(
-            chat_id=player_id,
-            text=text,
-            reply_markup=keyboard,
-            parse_mode="HTML",
+            chat_id=player_id, text=text, reply_markup=keyboard, parse_mode="HTML"
         )
         await db.update_card_message_id(card["id"], msg.message_id)
         return True
@@ -136,7 +130,6 @@ async def update_group_turn_panel(
     active_player_name: str,
     waiting_player_name: str,
 ):
-    """Update the group 'turn panel' message — one message per player showing who acts."""
     bot_username = context.bot.username
     phase = room.get("phase", "call")
     last_called = room.get("last_called_number")
@@ -153,9 +146,11 @@ async def update_group_turn_panel(
         if not card or not card.get("card_message_id"):
             continue
         is_active = pid == active_player_id
-        text = active_text if is_active else waiting_text
-        kb = active_kb if is_active else None
-        await _try_edit(context, chat_id, card["card_message_id"], text, kb)
+        await _try_edit(
+            context, chat_id, card["card_message_id"],
+            active_text if is_active else waiting_text,
+            active_kb if is_active else None,
+        )
 
 
 async def update_live_message(context, room, p1, p2):
@@ -179,11 +174,10 @@ async def handle_card_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.answer()
         return
 
-    room_id = int(parts[1])
+    room_id = parts[1]
     number = int(parts[2])
     player_id = query.from_user.id
 
-    # Only valid in DM context
     if query.message.chat.type != "private":
         await query.answer("🚫 Interact with your card in the private DM!", show_alert=True)
         return
@@ -197,7 +191,7 @@ async def handle_card_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.answer("🚫 You are not in this game!", show_alert=True)
         return
 
-    called = json.loads(room["called_numbers"])
+    called = room.get("called_numbers") or []
     phase = room.get("phase", "call")
     caller_id = room["current_turn"]
     last_called = room.get("last_called_number")
@@ -221,9 +215,11 @@ async def handle_card_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
         await query.answer(f"📢 You called {number}!")
 
-        called.append(number)
-        await db.update_room(room_id, called_numbers=json.dumps(called),
-                             last_called_number=number, phase="mark")
+        called = called + [number]
+        await db.update_room(room_id,
+                             called_numbers=called,
+                             last_called_number=number,
+                             phase="mark")
 
         card = await db.get_card(room_id, player_id)
         new_lines = count_completed_lines(card["numbers"], card["marked_numbers"] + [number])
@@ -246,10 +242,8 @@ async def handle_card_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
         await asyncio.gather(
             update_live_message(context, room, p1, p2),
-            send_dm_card(context, room, player_id, caller_name,
-                         marker_name, False, False),
-            send_dm_card(context, room, marker_id, marker_name,
-                         caller_name, False, True),
+            send_dm_card(context, room, player_id, caller_name, marker_name, False, False),
+            send_dm_card(context, room, marker_id, marker_name, caller_name, False, True),
         )
         await update_group_turn_panel(context, room, marker_id, marker_name, caller_name)
 
@@ -292,10 +286,8 @@ async def handle_card_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
         await asyncio.gather(
             update_live_message(context, room, p1, p2),
-            send_dm_card(context, room, player_id, marker_name,
-                         caller_name, True, False),
-            send_dm_card(context, room, other_id, caller_name,
-                         marker_name, False, False),
+            send_dm_card(context, room, player_id, marker_name, caller_name, True, False),
+            send_dm_card(context, room, other_id, caller_name, marker_name, False, False),
         )
         await update_group_turn_panel(context, room, player_id, marker_name, caller_name)
 
@@ -338,17 +330,14 @@ async def handle_bingo_win(context, room, winner_id, p1, p2, called):
         result = "🏆 You won! +500 coins added." if pid == winner_id else "😔 You lost. Better luck next time!"
         final_dm = (
             f"🏁 <b>Game Over — Room #{room['room_number']}</b>\n\n"
-            f"{result}\n"
-            f"Winner: <b>{winner_name}</b>"
+            f"{result}\nWinner: <b>{winner_name}</b>"
         )
         try:
             if card and card.get("card_message_id"):
                 try:
                     await context.bot.edit_message_text(
-                        chat_id=pid,
-                        message_id=card["card_message_id"],
-                        text=final_dm,
-                        parse_mode="HTML",
+                        chat_id=pid, message_id=card["card_message_id"],
+                        text=final_dm, parse_mode="HTML",
                     )
                 except BadRequest:
                     await context.bot.send_message(chat_id=pid, text=final_dm, parse_mode="HTML")
@@ -357,19 +346,18 @@ async def handle_bingo_win(context, room, winner_id, p1, p2, called):
         except (Forbidden, BadRequest):
             pass
 
-        for pid2 in (room["player1_id"], room["player2_id"]):
-            panel_card = await db.get_card(room["id"], pid2)
-            if panel_card and panel_card.get("card_message_id"):
-                try:
-                    await context.bot.edit_message_text(
-                        chat_id=room["chat_id"],
-                        message_id=panel_card["card_message_id"],
-                        text=f"🏁 <b>Game Over — Room #{room['room_number']}</b>\n\nWinner: <b>{winner_name}</b>",
-                        parse_mode="HTML",
-                    )
-                except BadRequest:
-                    pass
-        break
+    for pid in (room["player1_id"], room["player2_id"]):
+        panel_card = await db.get_card(room["id"], pid)
+        if panel_card and panel_card.get("card_message_id"):
+            try:
+                await context.bot.edit_message_text(
+                    chat_id=room["chat_id"],
+                    message_id=panel_card["card_message_id"],
+                    text=f"🏁 <b>Game Over — Room #{room['room_number']}</b>\n\nWinner: <b>{winner_name}</b>",
+                    parse_mode="HTML",
+                )
+            except BadRequest:
+                pass
 
 
 async def start_game_countdown(context, room_id, chat_id, p1, p2, room_message_id):
@@ -400,17 +388,14 @@ async def start_game_countdown(context, room_id, chat_id, p1, p2, room_message_i
                          current_turn=p1["telegram_id"],
                          phase="call",
                          last_called_number=None,
-                         called_numbers="[]")
+                         called_numbers=[])
 
     room = await db.get_room(room_id)
 
     live_text = build_live_message(room, p1, p2)
     try:
         live_msg = await context.bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=room_message_id,
-            text=live_text,
-            parse_mode="HTML",
+            chat_id=chat_id, message_id=room_message_id, text=live_text, parse_mode="HTML"
         )
     except BadRequest:
         live_msg = await context.bot.send_message(
@@ -448,16 +433,12 @@ async def start_game_countdown(context, room_id, chat_id, p1, p2, room_message_i
         )
         try:
             msg = await context.bot.send_message(
-                chat_id=pid,
-                text=text,
-                reply_markup=keyboard,
-                parse_mode="HTML",
+                chat_id=pid, text=text, reply_markup=keyboard, parse_mode="HTML"
             )
             await db.update_card_message_id(card["id"], msg.message_id)
         except (Forbidden, BadRequest):
             dm_failed.append(pname)
 
-    # Send group turn-panel messages (one per player, shows "open my card" button)
     for pid, pname, oname, is_caller in [
         (p1["telegram_id"], p1_name, p2_name, True),
         (p2["telegram_id"], p2_name, p1_name, False),
@@ -470,10 +451,7 @@ async def start_game_countdown(context, room_id, chat_id, p1, p2, room_message_i
             kb = None
 
         msg = await context.bot.send_message(
-            chat_id=chat_id,
-            text=text,
-            reply_markup=kb,
-            parse_mode="HTML",
+            chat_id=chat_id, text=text, reply_markup=kb, parse_mode="HTML"
         )
         card = await db.get_card(room_id, pid)
         await db.update_card_message_id(card["id"], msg.message_id)
@@ -485,7 +463,7 @@ async def start_game_countdown(context, room_id, chat_id, p1, p2, room_message_i
             text=(
                 f"⚠️ Could not send private cards to: <b>{names}</b>\n\n"
                 f"These players must start a DM with the bot first:\n"
-                f"👉 Tap here → @{bot_username} then press <b>Start</b>"
+                f"👉 @{bot_username} → press <b>Start</b>"
             ),
             parse_mode="HTML",
         )

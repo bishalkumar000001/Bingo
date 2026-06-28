@@ -7,3 +7,5 @@ services:
     envVars:
       - key: TELEGRAM_BOT_TOKEN
         sync: false
+      - key: MONGODB_URI
+        sync: false
