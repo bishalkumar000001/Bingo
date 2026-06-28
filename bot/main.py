@@ -8,13 +8,15 @@ from telegram.ext import (
     CallbackQueryHandler,
     ContextTypes,
 )
+from telegram.error import BadRequest, Forbidden
 
 import database as db
 from rooms import cmd_bingo, handle_join_callback, handle_cancel_room_callback, cmd_stopbingo
 from game import handle_card_callback, handle_rematch_callback
+from economy import award_winner, record_loss
 from leaderboard import build_leaderboard_text
 from utils import display_name_from_db
-from models import LINES_TO_WIN
+from models import LINES_TO_WIN, WIN_COINS
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -37,9 +39,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "3️⃣ A second player joins your room\n"
         "4️⃣ You each get a private 5×5 card (1–25)\n"
         "5️⃣ Take turns calling numbers\n"
-        "6️⃣ First to complete <b>5 lines</b> wins!\n\n"
+        f"6️⃣ First to complete <b>{LINES_TO_WIN} lines</b> wins!\n\n"
         "<b>Commands:</b>\n"
         "/bingo — Create a new match (in a group)\n"
+        "/cancel — Forfeit your current game\n"
         "/profile — View your stats\n"
         "/leaderboard — See top players\n"
         "/stopbingo — Cancel all rooms (admins only)\n\n"
@@ -84,6 +87,94 @@ async def cmd_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode="HTML")
 
 
+async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+
+    player = await db.get_user(user.id)
+    if not player:
+        await update.message.reply_text("❌ You're not registered. Send /start first.")
+        return
+
+    room = await db.get_player_active_room(user.id)
+    if not room:
+        await update.message.reply_text("❌ You are not in any active game right now.")
+        return
+
+    forfeiter_name = display_name_from_db(player)
+
+    if room["status"] == "waiting":
+        await db.cancel_room(room["id"])
+        try:
+            await context.bot.edit_message_text(
+                chat_id=room["chat_id"],
+                message_id=room["room_message_id"],
+                text=f"❌ <b>Room #{room['room_number']}</b> was cancelled by {forfeiter_name}.",
+                parse_mode="HTML",
+            )
+        except (BadRequest, KeyError):
+            pass
+        await update.message.reply_text(
+            f"✅ Your waiting room <b>#{room['room_number']}</b> has been cancelled.",
+            parse_mode="HTML",
+        )
+        return
+
+    opponent_id = (
+        room["player2_id"] if user.id == room["player1_id"] else room["player1_id"]
+    )
+    opponent = await db.get_user(opponent_id)
+    opponent_name = display_name_from_db(opponent) if opponent else "Opponent"
+
+    await db.finish_room(room["id"])
+    await asyncio.gather(
+        award_winner(opponent_id),
+        record_loss(user.id),
+    )
+
+    forfeit_text = (
+        f"🏳️ <b>Forfeit — Room #{room['room_number']}</b>\n\n"
+        f"😔 <b>{forfeiter_name}</b> forfeited the match.\n"
+        f"🥇 <b>{opponent_name}</b> wins by forfeit!\n"
+        f"💰 Reward: <b>+{WIN_COINS} Coins</b>"
+    )
+
+    if room.get("live_message_id"):
+        try:
+            await context.bot.edit_message_text(
+                chat_id=room["chat_id"],
+                message_id=room["live_message_id"],
+                text=forfeit_text,
+                parse_mode="HTML",
+            )
+        except BadRequest:
+            await context.bot.send_message(
+                chat_id=room["chat_id"], text=forfeit_text, parse_mode="HTML"
+            )
+    else:
+        await context.bot.send_message(
+            chat_id=room["chat_id"], text=forfeit_text, parse_mode="HTML"
+        )
+
+    try:
+        await context.bot.send_message(
+            chat_id=opponent_id,
+            text=(
+                f"🏆 <b>{forfeiter_name}</b> forfeited!\n"
+                f"You win Room <b>#{room['room_number']}</b> by forfeit.\n"
+                f"💰 <b>+{WIN_COINS} coins</b> added to your profile."
+            ),
+            parse_mode="HTML",
+        )
+    except (Forbidden, BadRequest):
+        pass
+
+    await update.message.reply_text(
+        f"🏳️ You have forfeited <b>Room #{room['room_number']}</b>.\n"
+        f"{opponent_name} wins.",
+        parse_mode="HTML",
+    )
+
+
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
@@ -119,6 +210,7 @@ def main():
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("bingo", cmd_bingo))
+    app.add_handler(CommandHandler("cancel", cmd_cancel))
     app.add_handler(CommandHandler("profile", cmd_profile))
     app.add_handler(CommandHandler("leaderboard", cmd_leaderboard))
     app.add_handler(CommandHandler("stopbingo", cmd_stopbingo))
