@@ -6,3 +6,15 @@ id = "9c4srnggyIkMjlBu70EYS"
 uri = "file://velocity-bingo-bot.zip"
 type = "unspecified"
 title = "velocity-bingo-bot.zip — All files (with rematch)"
+
+[[outputs]]
+id = "rgIfnC136Dpy0KkHQ68bG"
+uri = "file://render.yaml"
+type = "unspecified"
+title = "render.yaml"
+
+[[outputs]]
+id = "vv5FA6FsYNHHIkHs5VdMP"
+uri = "file://README.md"
+type = "text"
+title = "README.md"
