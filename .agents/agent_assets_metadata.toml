@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "9c4srnggyIkMjlBu70EYS"
+uri = "file://velocity-bingo-bot.zip"
+type = "unspecified"
+title = "velocity-bingo-bot.zip — All source files"
