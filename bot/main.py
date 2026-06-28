@@ -11,7 +11,7 @@ from telegram.ext import (
 
 import database as db
 from rooms import cmd_bingo, handle_join_callback, handle_cancel_room_callback, cmd_stopbingo
-from game import handle_card_callback, handle_view_card_callback
+from game import handle_card_callback
 from leaderboard import build_leaderboard_text
 from utils import display_name_from_db
 from models import LINES_TO_WIN
@@ -92,8 +92,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_join_callback(update, context)
     elif data.startswith("cancel_room:"):
         await handle_cancel_room_callback(update, context)
-    elif data.startswith("view_card:"):
-        await handle_view_card_callback(update, context)
     elif data.startswith("card:"):
         await handle_card_callback(update, context)
     else:
