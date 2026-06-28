@@ -1,7 +1,7 @@
 import asyncio
 from typing import Optional
 
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from telegram.error import BadRequest, Forbidden
 
@@ -308,21 +308,26 @@ async def handle_bingo_win(context, room, winner_id, p1, p2, called):
         f"📋 Numbers called: {format_called_numbers(called)}"
     )
 
+    rematch_kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🔄 Rematch!", callback_data=f"rematch:{room['id']}")
+    ]])
+
     if room.get("live_message_id"):
         try:
             await context.bot.edit_message_text(
                 chat_id=room["chat_id"],
                 message_id=room["live_message_id"],
                 text=win_text,
+                reply_markup=rematch_kb,
                 parse_mode="HTML",
             )
         except BadRequest:
             await context.bot.send_message(
-                chat_id=room["chat_id"], text=win_text, parse_mode="HTML"
+                chat_id=room["chat_id"], text=win_text, reply_markup=rematch_kb, parse_mode="HTML"
             )
     else:
         await context.bot.send_message(
-            chat_id=room["chat_id"], text=win_text, parse_mode="HTML"
+            chat_id=room["chat_id"], text=win_text, reply_markup=rematch_kb, parse_mode="HTML"
         )
 
     for pid in (room["player1_id"], room["player2_id"]):
@@ -358,6 +363,90 @@ async def handle_bingo_win(context, room, winner_id, p1, p2, called):
                 )
             except BadRequest:
                 pass
+
+
+async def handle_rematch_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user = query.from_user
+    old_room_id = query.data.split(":")[1]
+
+    old_room = await db.get_room(old_room_id)
+    if not old_room:
+        await query.answer("Original room not found.", show_alert=True)
+        return
+
+    if user.id not in (old_room["player1_id"], old_room["player2_id"]):
+        await query.answer("🚫 Only players from this match can rematch!", show_alert=True)
+        return
+
+    if old_room["status"] not in ("finished", "cancelled"):
+        await query.answer("Game isn't over yet!", show_alert=True)
+        return
+
+    p1_id = old_room["player1_id"]
+    p2_id = old_room["player2_id"]
+    chat_id = old_room["chat_id"]
+
+    p1 = await db.get_user(p1_id)
+    p2 = await db.get_user(p2_id)
+
+    if not p1 or not p2:
+        await query.answer("A player is no longer registered.", show_alert=True)
+        return
+
+    if await db.is_player_in_active_room(p1_id):
+        await query.answer(
+            f"{display_name_from_db(p1)} is already in another active match!",
+            show_alert=True,
+        )
+        return
+
+    if await db.is_player_in_active_room(p2_id):
+        await query.answer(
+            f"{display_name_from_db(p2)} is already in another active match!",
+            show_alert=True,
+        )
+        return
+
+    active_rooms = await db.get_active_rooms_in_chat(chat_id)
+    from models import MAX_ROOMS_PER_CHAT
+    if len(active_rooms) >= MAX_ROOMS_PER_CHAT:
+        await query.answer(
+            f"This group already has {MAX_ROOMS_PER_CHAT} active rooms. Wait for one to finish!",
+            show_alert=True,
+        )
+        return
+
+    await query.answer("🔄 Starting rematch!")
+
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+    except BadRequest:
+        pass
+
+    room_number = await db.get_next_room_number(chat_id)
+    placeholder = await context.bot.send_message(
+        chat_id=chat_id, text="🔄 Setting up rematch..."
+    )
+
+    new_room_id = await db.create_room(
+        chat_id=chat_id,
+        room_number=room_number,
+        player1_id=p1_id,
+        room_message_id=placeholder.message_id,
+    )
+    await db.join_room(new_room_id, p2_id)
+
+    asyncio.create_task(
+        start_game_countdown(
+            context,
+            room_id=new_room_id,
+            chat_id=chat_id,
+            p1=p1,
+            p2=p2,
+            room_message_id=placeholder.message_id,
+        )
+    )
 
 
 async def start_game_countdown(context, room_id, chat_id, p1, p2, room_message_id):
