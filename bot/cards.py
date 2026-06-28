@@ -19,10 +19,10 @@ def count_completed_lines(numbers: List[int], marked: List[int]) -> int:
 
 
 def get_bingo_status(completed_lines: int) -> str:
-    letters = ""
-    for i, letter in enumerate(BINGO_LETTERS):
-        letters += f"✅{letter} " if i < completed_lines else f"❌{letter} "
-    return letters.strip()
+    return " ".join(
+        f"✅{letter}" if i < completed_lines else f"❌{letter}"
+        for i, letter in enumerate(BINGO_LETTERS)
+    )
 
 
 def build_popup_card_text(
@@ -33,89 +33,71 @@ def build_popup_card_text(
 ) -> str:
     rows = []
     for r in range(5):
-        row_parts = []
+        parts = []
         for c in range(5):
             num = numbers[r * 5 + c]
-            if num in marked:
-                row_parts.append(f"✅{num:2d}")
-            else:
-                row_parts.append(f"  {num:2d}")
-        rows.append(" ".join(row_parts))
+            parts.append(f"✅{num:2}" if num in marked else f"  {num:2}")
+        rows.append("  ".join(parts))
     grid = "\n".join(rows)
-
-    bingo = ""
-    for i, letter in enumerate(BINGO_LETTERS):
-        bingo += f"{'✅' if i < completed_lines else '❌'}{letter} "
-
-    return (
-        f"🃏 Room #{room_number} — Your Card\n\n"
-        f"{grid}\n\n"
-        f"Lines: {completed_lines}/{LINES_TO_WIN}  {bingo.strip()}"
+    bingo = " ".join(
+        f"✅{l}" if i < completed_lines else f"❌{l}"
+        for i, l in enumerate(BINGO_LETTERS)
     )
+    return f"🃏 Room #{room_number} — Your Card\n\n{grid}\n\nLines: {completed_lines}/{LINES_TO_WIN}  {bingo}"
 
 
-def build_locked_text(room_number: int, player_name: str) -> str:
+def _peek_button(room_id: int, player_id: int) -> InlineKeyboardButton:
+    return InlineKeyboardButton("👁 Peek at My Card", callback_data=f"view_card:{room_id}:{player_id}")
+
+
+def build_locked_text(room_number: int, player_name: str, completed_lines: int) -> str:
+    bingo = get_bingo_status(completed_lines)
     return (
-        f"🔒 <b>{player_name}'s Card</b> — Room #{room_number}\n\n"
-        f"Tap the button below to privately view your numbers.\n"
-        f"Only you can see your card."
+        f"🔒 <b>{player_name}'s Card</b> — Room #{room_number}\n"
+        f"Lines: {completed_lines}/{LINES_TO_WIN}  {bingo}\n\n"
+        f"⏳ Waiting for opponent's turn..."
     )
 
 
 def build_locked_keyboard(room_id: int, player_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("👁 Peek at My Card", callback_data=f"view_card:{room_id}:{player_id}")]
-    ])
+    return InlineKeyboardMarkup([[_peek_button(room_id, player_id)]])
 
 
-def build_active_text(
-    room_number: int,
-    player_name: str,
-    opponent_name: str,
-    completed_lines: int,
-    called_numbers: List[int],
-    is_my_turn_to_call: bool,
-    need_to_mark: bool,
-    last_called: Optional[int],
-) -> str:
-    bingo_status = get_bingo_status(completed_lines)
-    called_str = " • ".join(str(n) for n in called_numbers) if called_numbers else "None"
-
-    if is_my_turn_to_call:
-        action_line = "🎯 <b>Your turn!</b> Tap a number to call it."
-    elif need_to_mark:
-        action_line = f"⚡ <b>Mark number {last_called}!</b> Tap it on your card below."
-    else:
-        action_line = f"⏳ Waiting for <b>{opponent_name}</b>..."
-
+def build_call_text(room_number: int, player_name: str, completed_lines: int, called_count: int) -> str:
+    bingo = get_bingo_status(completed_lines)
     return (
-        f"🎮 <b>Room #{room_number}</b> — {player_name}'s Card\n"
-        f"────────────────────\n"
-        f"📋 Called: {called_str}\n"
-        f"🔤 {bingo_status}  ✅ Lines: {completed_lines}/{LINES_TO_WIN}\n"
-        f"────────────────────\n"
-        f"{action_line}"
+        f"🎯 <b>{player_name} — YOUR TURN!</b> — Room #{room_number}\n"
+        f"Lines: {completed_lines}/{LINES_TO_WIN}  {bingo}\n\n"
+        f"Tap any number below to call it.\n"
+        f"👁 Peek at your card to plan your move!"
     )
 
 
-def build_active_keyboard(
-    room_id: int,
-    numbers: List[int],
-    marked: List[int],
-    last_called: Optional[int],
-    need_to_mark: bool,
-) -> InlineKeyboardMarkup:
+def build_call_keyboard(room_id: int, player_id: int, called_numbers: List[int]) -> InlineKeyboardMarkup:
+    uncalled = [n for n in range(1, 26) if n not in called_numbers]
     rows = []
-    for r in range(5):
-        row = []
-        for c in range(5):
-            num = numbers[r * 5 + c]
-            if num in marked:
-                label = f"✅{num}"
-            elif num == last_called and need_to_mark:
-                label = f"⚡{num}"
-            else:
-                label = str(num)
-            row.append(InlineKeyboardButton(label, callback_data=f"card:{room_id}:{num}"))
+    chunk = 5
+    for i in range(0, len(uncalled), chunk):
+        row = [
+            InlineKeyboardButton(str(n), callback_data=f"card:{room_id}:{n}")
+            for n in uncalled[i:i + chunk]
+        ]
         rows.append(row)
+    rows.append([_peek_button(room_id, player_id)])
     return InlineKeyboardMarkup(rows)
+
+
+def build_mark_text(room_number: int, player_name: str, completed_lines: int, last_called: int) -> str:
+    bingo = get_bingo_status(completed_lines)
+    return (
+        f"⚡ <b>{player_name} — MARK {last_called}!</b> — Room #{room_number}\n"
+        f"Lines: {completed_lines}/{LINES_TO_WIN}  {bingo}\n\n"
+        f"Number <b>{last_called}</b> was called. Mark it on your card!"
+    )
+
+
+def build_mark_keyboard(room_id: int, player_id: int, last_called: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"✅ Mark {last_called}", callback_data=f"card:{room_id}:{last_called}")],
+        [_peek_button(room_id, player_id)],
+    ])
