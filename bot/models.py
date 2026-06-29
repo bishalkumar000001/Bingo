@@ -1,9 +1,18 @@
+import os
+
 WIN_COINS = 500
 LINES_TO_WIN = 5
 
 BINGO_LETTERS = ["B", "I", "N", "G", "O"]
 
 MAX_ROOMS_PER_CHAT = 3
+
+OWNER_ID = int(os.environ.get("OWNER_ID", "0"))
+
+_logger = os.environ.get("LOGGER_GROUP_ID", "")
+LOGGER_GROUP_ID = int(_logger) if _logger else None
+
+SUPPORT_CHANNEL = os.environ.get("SUPPORT_CHANNEL", "")
 
 ALL_LINES = [
     [0, 1, 2, 3, 4],

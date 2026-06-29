@@ -16,8 +16,44 @@ from cards import (
     build_group_waiting_text,
 )
 from economy import award_winner, record_loss
-from models import WIN_COINS, LINES_TO_WIN
+from models import WIN_COINS, LINES_TO_WIN, LOGGER_GROUP_ID, SUPPORT_CHANNEL
 from utils import display_name_from_db, format_called_numbers
+
+
+def _msg_link(chat_id: int, message_id: int) -> str:
+    cid = str(chat_id)
+    if cid.startswith("-100"):
+        link_id = cid[4:]
+    else:
+        link_id = cid.lstrip("-")
+    return f"https://t.me/c/{link_id}/{message_id}"
+
+
+async def _log(context, text: str):
+    if not LOGGER_GROUP_ID:
+        return
+    try:
+        await context.bot.send_message(LOGGER_GROUP_ID, text, parse_mode="HTML")
+    except Exception:
+        pass
+
+
+async def _try_pin(context, chat_id: int, message_id: int):
+    try:
+        await context.bot.pin_chat_message(
+            chat_id=chat_id,
+            message_id=message_id,
+            disable_notification=True,
+        )
+    except (BadRequest, Forbidden):
+        pass
+
+
+async def _try_unpin(context, chat_id: int, message_id: int):
+    try:
+        await context.bot.unpin_chat_message(chat_id=chat_id, message_id=message_id)
+    except (BadRequest, Forbidden):
+        pass
 
 
 def build_live_message(room: dict, p1: dict, p2: dict) -> str:
@@ -138,7 +174,7 @@ async def update_group_turn_panel(
     active_text = build_group_turn_text(
         room["room_number"], active_player_name, waiting_player_name, phase, last_called
     )
-    active_kb = build_group_turn_keyboard(bot_username)
+    active_kb = build_group_turn_keyboard(bot_username, SUPPORT_CHANNEL)
     waiting_text = build_group_waiting_text(room["room_number"], active_player_name)
 
     for pid in (room["player1_id"], room["player2_id"]):
@@ -312,22 +348,26 @@ async def handle_bingo_win(context, room, winner_id, p1, p2, called):
         InlineKeyboardButton("🔄 Rematch!", callback_data=f"rematch:{room['id']}")
     ]])
 
-    if room.get("live_message_id"):
+    chat_id = room["chat_id"]
+    live_mid = room.get("live_message_id")
+
+    if live_mid:
         try:
             await context.bot.edit_message_text(
-                chat_id=room["chat_id"],
-                message_id=room["live_message_id"],
+                chat_id=chat_id,
+                message_id=live_mid,
                 text=win_text,
                 reply_markup=rematch_kb,
                 parse_mode="HTML",
             )
         except BadRequest:
             await context.bot.send_message(
-                chat_id=room["chat_id"], text=win_text, reply_markup=rematch_kb, parse_mode="HTML"
+                chat_id=chat_id, text=win_text, reply_markup=rematch_kb, parse_mode="HTML"
             )
+        await _try_unpin(context, chat_id, live_mid)
     else:
         await context.bot.send_message(
-            chat_id=room["chat_id"], text=win_text, reply_markup=rematch_kb, parse_mode="HTML"
+            chat_id=chat_id, text=win_text, reply_markup=rematch_kb, parse_mode="HTML"
         )
 
     for pid in (room["player1_id"], room["player2_id"]):
@@ -356,7 +396,7 @@ async def handle_bingo_win(context, room, winner_id, p1, p2, called):
         if panel_card and panel_card.get("card_message_id"):
             try:
                 await context.bot.edit_message_text(
-                    chat_id=room["chat_id"],
+                    chat_id=chat_id,
                     message_id=panel_card["card_message_id"],
                     text=f"🏁 <b>Game Over — Room #{room['room_number']}</b>\n\nWinner: <b>{winner_name}</b>",
                     parse_mode="HTML",
@@ -408,8 +448,8 @@ async def handle_rematch_callback(update: Update, context: ContextTypes.DEFAULT_
         )
         return
 
-    active_rooms = await db.get_active_rooms_in_chat(chat_id)
     from models import MAX_ROOMS_PER_CHAT
+    active_rooms = await db.get_active_rooms_in_chat(chat_id)
     if len(active_rooms) >= MAX_ROOMS_PER_CHAT:
         await query.answer(
             f"This group already has {MAX_ROOMS_PER_CHAT} active rooms. Wait for one to finish!",
@@ -493,6 +533,23 @@ async def start_game_countdown(context, room_id, chat_id, p1, p2, room_message_i
     await db.update_room(room_id, live_message_id=live_msg.message_id)
     room = await db.get_room(room_id)
 
+    await _try_pin(context, chat_id, live_msg.message_id)
+
+    try:
+        chat_info = await context.bot.get_chat(chat_id)
+        chat_title = chat_info.title or str(chat_id)
+    except Exception:
+        chat_title = str(chat_id)
+
+    await _log(
+        context,
+        f"🎮 <b>Game Started</b>\n\n"
+        f"<b>CHAT:</b> <code>{chat_id}</code> | {chat_title}\n"
+        f"<b>USER:</b> <code>{p1['telegram_id']}</code> | {p1_name}\n"
+        f"<b>VS:</b> <code>{p2['telegram_id']}</code> | {p2_name}\n"
+        f"<b>MESSAGE LINK:</b> {_msg_link(chat_id, live_msg.message_id)}"
+    )
+
     dm_failed = []
     for pid, pname, oname, is_caller in [
         (p1["telegram_id"], p1_name, p2_name, True),
@@ -534,7 +591,7 @@ async def start_game_countdown(context, room_id, chat_id, p1, p2, room_message_i
     ]:
         if is_caller:
             text = build_group_turn_text(room["room_number"], pname, oname, "call", None)
-            kb = build_group_turn_keyboard(bot_username)
+            kb = build_group_turn_keyboard(bot_username, SUPPORT_CHANNEL)
         else:
             text = build_group_waiting_text(room["room_number"], p1_name)
             kb = None

@@ -25,31 +25,6 @@ def get_bingo_status(completed_lines: int) -> str:
     )
 
 
-def build_popup_card_text(
-    room_number: int,
-    numbers: List[int],
-    marked: List[int],
-    completed_lines: int,
-) -> str:
-    rows = []
-    for r in range(5):
-        parts = []
-        for c in range(5):
-            num = numbers[r * 5 + c]
-            parts.append(f"✅{num:2}" if num in marked else f"  {num:2}")
-        rows.append("  ".join(parts))
-    grid = "\n".join(rows)
-    bingo = " ".join(
-        f"✅{l}" if i < completed_lines else f"❌{l}"
-        for i, l in enumerate(BINGO_LETTERS)
-    )
-    return (
-        f"🃏 Room #{room_number} — Your Card\n\n"
-        f"{grid}\n\n"
-        f"Lines: {completed_lines}/{LINES_TO_WIN}  {bingo}"
-    )
-
-
 def build_dm_card_text(
     room_number: int,
     player_name: str,
@@ -99,7 +74,7 @@ def build_dm_card_text(
 
 
 def build_dm_card_keyboard(
-    room_id: int,
+    room_id: str,
     numbers: List[int],
     marked: List[int],
     called_numbers: List[int],
@@ -137,10 +112,11 @@ def build_group_turn_text(room_number: int, player_name: str, opponent_name: str
         )
 
 
-def build_group_turn_keyboard(bot_username: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton("📩 Open My Card", url=f"https://t.me/{bot_username}")
-    ]])
+def build_group_turn_keyboard(bot_username: str, support_channel: str = "") -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton("📩 Open My Card", url=f"https://t.me/{bot_username}")]]
+    if support_channel:
+        rows.append([InlineKeyboardButton("📢 Support Channel", url=support_channel)])
+    return InlineKeyboardMarkup(rows)
 
 
 def build_group_waiting_text(room_number: int, waiting_name: str) -> str:

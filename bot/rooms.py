@@ -6,10 +6,10 @@ from telegram.error import BadRequest
 import database as db
 from models import MAX_ROOMS_PER_CHAT
 from utils import display_name, display_name_from_db
-from game import start_game_countdown
+from game import start_game_countdown, _try_unpin
 
 
-def build_waiting_keyboard(room_id: int) -> InlineKeyboardMarkup:
+def build_waiting_keyboard(room_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [
@@ -183,16 +183,18 @@ async def cmd_stopbingo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     for room in active_rooms:
         await db.cancel_room(room["id"])
-        if room.get("live_message_id"):
+        live_mid = room.get("live_message_id")
+        if live_mid:
             try:
                 await context.bot.edit_message_text(
                     chat_id=chat.id,
-                    message_id=room["live_message_id"],
+                    message_id=live_mid,
                     text=f"🛑 Room #{room['room_number']} was stopped by an admin.",
                     parse_mode="HTML",
                 )
             except BadRequest:
                 pass
+            await _try_unpin(context, chat.id, live_mid)
 
     await update.message.reply_text(
         f"🛑 Stopped {len(active_rooms)} active room(s) in this group."

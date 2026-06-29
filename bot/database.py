@@ -68,6 +68,12 @@ async def create_user(telegram_id: int, username: str, first_name: str):
     )
 
 
+async def get_all_user_ids() -> List[int]:
+    cursor = _col("users").find({}, {"telegram_id": 1, "_id": 0})
+    docs = await cursor.to_list(length=None)
+    return [d["telegram_id"] for d in docs]
+
+
 async def get_active_rooms_in_chat(chat_id: int) -> List[Dict]:
     cursor = _col("rooms").find({"chat_id": chat_id, "status": {"$in": ["waiting", "playing"]}})
     docs = await cursor.to_list(length=10)

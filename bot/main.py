@@ -6,17 +6,18 @@ from telegram.ext import (
     Application,
     CommandHandler,
     CallbackQueryHandler,
+    ChatMemberHandler,
     ContextTypes,
 )
 from telegram.error import BadRequest, Forbidden
 
 import database as db
 from rooms import cmd_bingo, handle_join_callback, handle_cancel_room_callback, cmd_stopbingo
-from game import handle_card_callback, handle_rematch_callback
+from game import handle_card_callback, handle_rematch_callback, _try_unpin, _log
 from economy import award_winner, record_loss
 from leaderboard import build_leaderboard_text
-from utils import display_name_from_db
-from models import LINES_TO_WIN, WIN_COINS
+from utils import display_name_from_db, display_name
+from models import LINES_TO_WIN, WIN_COINS, OWNER_ID, LOGGER_GROUP_ID, SUPPORT_CHANNEL
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -138,22 +139,22 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"💰 Reward: <b>+{WIN_COINS} Coins</b>"
     )
 
-    if room.get("live_message_id"):
+    chat_id = room["chat_id"]
+    live_mid = room.get("live_message_id")
+
+    if live_mid:
         try:
             await context.bot.edit_message_text(
-                chat_id=room["chat_id"],
-                message_id=room["live_message_id"],
+                chat_id=chat_id,
+                message_id=live_mid,
                 text=forfeit_text,
                 parse_mode="HTML",
             )
         except BadRequest:
-            await context.bot.send_message(
-                chat_id=room["chat_id"], text=forfeit_text, parse_mode="HTML"
-            )
+            await context.bot.send_message(chat_id=chat_id, text=forfeit_text, parse_mode="HTML")
+        await _try_unpin(context, chat_id, live_mid)
     else:
-        await context.bot.send_message(
-            chat_id=room["chat_id"], text=forfeit_text, parse_mode="HTML"
-        )
+        await context.bot.send_message(chat_id=chat_id, text=forfeit_text, parse_mode="HTML")
 
     try:
         await context.bot.send_message(
@@ -173,6 +174,104 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"{opponent_name} wins.",
         parse_mode="HTML",
     )
+
+
+async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+
+    if not OWNER_ID or user.id != OWNER_ID:
+        await update.message.reply_text("❌ This command is for the bot owner only.")
+        return
+
+    source = update.message.reply_to_message
+    if not source and not context.args:
+        await update.message.reply_text(
+            "Usage:\n"
+            "• Reply to a message with /broadcast to forward it to all users\n"
+            "• /broadcast <text> to send a plain message"
+        )
+        return
+
+    user_ids = await db.get_all_user_ids()
+    sent = failed = 0
+
+    status_msg = await update.message.reply_text(
+        f"📡 Broadcasting to <b>{len(user_ids)}</b> users...", parse_mode="HTML"
+    )
+
+    for uid in user_ids:
+        try:
+            if source:
+                await source.copy(chat_id=uid)
+            else:
+                await context.bot.send_message(
+                    chat_id=uid,
+                    text=" ".join(context.args),
+                    parse_mode="HTML",
+                )
+            sent += 1
+        except (Forbidden, BadRequest):
+            failed += 1
+        except Exception:
+            failed += 1
+        await asyncio.sleep(0.05)
+
+    try:
+        await status_msg.edit_text(
+            f"✅ Broadcast complete!\n\n"
+            f"📨 Sent: <b>{sent}</b>\n"
+            f"❌ Failed: <b>{failed}</b>",
+            parse_mode="HTML",
+        )
+    except BadRequest:
+        pass
+
+
+async def handle_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not LOGGER_GROUP_ID:
+        return
+
+    result = update.my_chat_member
+    if not result:
+        return
+
+    new_status = result.new_chat_member.status
+    old_status = result.old_chat_member.status
+
+    if new_status not in ("member", "administrator"):
+        return
+    if old_status in ("member", "administrator"):
+        return
+
+    chat = result.chat
+    if chat.type not in ("group", "supergroup"):
+        return
+
+    added_by = result.from_user
+    added_by_name = display_name(added_by) if added_by else "Unknown"
+
+    try:
+        member_count = await context.bot.get_chat_member_count(chat.id)
+    except Exception:
+        member_count = "?"
+
+    username_str = f"@{chat.username}" if chat.username else "PRIVATE GROUP"
+
+    try:
+        invite_link = await context.bot.export_chat_invite_link(chat.id)
+    except Exception:
+        invite_link = "❌ NO INVITE PERMISSION"
+
+    log_text = (
+        f"📋 <b>CHAT NAME:</b> {chat.title}\n"
+        f"🆔 <b>CHAT ID:</b> <code>{chat.id}</code>\n"
+        f"👤 <b>CHAT USERNAME:</b> {username_str}\n"
+        f"🔗 <b>CHAT LINK:</b> {invite_link}\n"
+        f"👥 <b>GROUP MEMBERS:</b> {member_count}\n"
+        f"🤵 <b>ADDED BY:</b> {added_by_name}"
+    )
+
+    await _log(context, log_text)
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -214,6 +313,8 @@ def main():
     app.add_handler(CommandHandler("profile", cmd_profile))
     app.add_handler(CommandHandler("leaderboard", cmd_leaderboard))
     app.add_handler(CommandHandler("stopbingo", cmd_stopbingo))
+    app.add_handler(CommandHandler("broadcast", cmd_broadcast))
+    app.add_handler(ChatMemberHandler(handle_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
     logger.info("🎮 Velocity Bingo Bot is starting...")
