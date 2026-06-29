@@ -22,10 +22,7 @@ from utils import display_name_from_db, format_called_numbers
 
 def _msg_link(chat_id: int, message_id: int) -> str:
     cid = str(chat_id)
-    if cid.startswith("-100"):
-        link_id = cid[4:]
-    else:
-        link_id = cid.lstrip("-")
+    link_id = cid[4:] if cid.startswith("-100") else cid.lstrip("-")
     return f"https://t.me/c/{link_id}/{message_id}"
 
 
@@ -41,9 +38,7 @@ async def _log(context, text: str):
 async def _try_pin(context, chat_id: int, message_id: int):
     try:
         await context.bot.pin_chat_message(
-            chat_id=chat_id,
-            message_id=message_id,
-            disable_notification=True,
+            chat_id=chat_id, message_id=message_id, disable_notification=True
         )
     except (BadRequest, Forbidden):
         pass
@@ -54,6 +49,12 @@ async def _try_unpin(context, chat_id: int, message_id: int):
         await context.bot.unpin_chat_message(chat_id=chat_id, message_id=message_id)
     except (BadRequest, Forbidden):
         pass
+
+
+def _open_card_kb(bot_username: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("📩 Open My Card", url=f"https://t.me/{bot_username}")
+    ]])
 
 
 def build_live_message(room: dict, p1: dict, p2: dict) -> str:
@@ -266,9 +267,11 @@ async def handle_card_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             return
 
         caller_name = display_name_from_db(p1 if room["player1_id"] == player_id else p2)
+
         await context.bot.send_message(
             chat_id=room["chat_id"],
             text=f"🎲 <b>Room #{room['room_number']}</b> — {caller_name} called <b>{number}</b>!",
+            reply_markup=_open_card_kb(context.bot.username),
             parse_mode="HTML",
         )
 
@@ -329,9 +332,13 @@ async def handle_card_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def handle_bingo_win(context, room, winner_id, p1, p2, called):
+    chat_id = room["chat_id"]
     loser_id = room["player2_id"] if winner_id == room["player1_id"] else room["player1_id"]
     await db.finish_room(room["id"])
-    await asyncio.gather(award_winner(winner_id), record_loss(loser_id))
+    await asyncio.gather(
+        award_winner(winner_id, chat_id),
+        record_loss(loser_id, chat_id),
+    )
 
     winner = p1 if winner_id == room["player1_id"] else p2
     winner_name = display_name_from_db(winner)
@@ -348,9 +355,7 @@ async def handle_bingo_win(context, room, winner_id, p1, p2, called):
         InlineKeyboardButton("🔄 Rematch!", callback_data=f"rematch:{room['id']}")
     ]])
 
-    chat_id = room["chat_id"]
     live_mid = room.get("live_message_id")
-
     if live_mid:
         try:
             await context.bot.edit_message_text(

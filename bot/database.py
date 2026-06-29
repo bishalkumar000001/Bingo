@@ -1,6 +1,6 @@
 import os
-from typing import Optional, List, Dict, Any
-from datetime import datetime, timezone
+from typing import Optional, List, Dict
+from datetime import datetime, timezone, timedelta
 
 import motor.motor_asyncio
 from bson import ObjectId
@@ -41,6 +41,9 @@ async def init_db():
     await db["rooms"].create_index([("player1_id", 1), ("status", 1)])
     await db["rooms"].create_index([("player2_id", 1), ("status", 1)])
     await db["cards"].create_index([("room_id", 1), ("player_id", 1)])
+    await db["game_results"].create_index([("telegram_id", 1), ("created_at", -1)])
+    await db["game_results"].create_index([("chat_id", 1), ("created_at", -1)])
+    await db["game_results"].create_index([("won", 1), ("created_at", -1)])
 
 
 async def get_user(telegram_id: int) -> Optional[Dict]:
@@ -165,24 +168,80 @@ async def update_card_message_id(card_id: str, message_id: int):
     )
 
 
+async def log_game_result(telegram_id: int, chat_id: int, won: bool):
+    await _col("game_results").insert_one({
+        "telegram_id": telegram_id,
+        "chat_id": chat_id,
+        "won": won,
+        "created_at": datetime.now(timezone.utc),
+    })
+
+
+def _time_filter_start(time_filter: str) -> Optional[datetime]:
+    now = datetime.now(timezone.utc)
+    if time_filter == "today":
+        return now.replace(hour=0, minute=0, second=0, microsecond=0)
+    elif time_filter == "week":
+        start = now - timedelta(days=now.weekday())
+        return start.replace(hour=0, minute=0, second=0, microsecond=0)
+    elif time_filter == "month":
+        return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    elif time_filter == "year":
+        return now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+    return None
+
+
 async def get_leaderboard(limit: int = 10) -> List[Dict]:
     pipeline = [
         {"$match": {"games_played": {"$gt": 0}}},
-        {"$addFields": {
-            "win_rate": {
-                "$cond": [
-                    {"$gt": ["$games_played", 0]},
-                    {"$multiply": [{"$divide": ["$wins", "$games_played"]}, 100]},
-                    0,
-                ]
-            }
-        }},
         {"$sort": {"wins": -1, "coins": -1}},
         {"$limit": limit},
     ]
     cursor = _col("users").aggregate(pipeline)
     docs = await cursor.to_list(length=limit)
     return [_to_dict(d) for d in docs]
+
+
+async def get_leaderboard_filtered(
+    scope: str, chat_id: int, time_filter: str, limit: int = 10
+) -> List[Dict]:
+    if scope == "global" and time_filter == "all_time":
+        return await get_leaderboard(limit)
+
+    match: Dict = {"won": True}
+
+    if scope == "chat" and chat_id:
+        match["chat_id"] = chat_id
+
+    start = _time_filter_start(time_filter)
+    if start:
+        match["created_at"] = {"$gte": start}
+
+    pipeline = [
+        {"$match": match},
+        {"$group": {"_id": "$telegram_id", "wins": {"$sum": 1}}},
+        {"$sort": {"wins": -1}},
+        {"$limit": limit},
+        {"$lookup": {
+            "from": "users",
+            "localField": "_id",
+            "foreignField": "telegram_id",
+            "as": "user_doc",
+        }},
+        {"$unwind": "$user_doc"},
+        {"$project": {
+            "_id": 0,
+            "telegram_id": "$_id",
+            "wins": 1,
+            "username": "$user_doc.username",
+            "first_name": "$user_doc.first_name",
+            "coins": "$user_doc.coins",
+            "games_played": "$user_doc.games_played",
+        }},
+    ]
+
+    cursor = _col("game_results").aggregate(pipeline)
+    return await cursor.to_list(length=limit)
 
 
 async def update_user_stats(telegram_id: int, won: bool, coins_delta: int):

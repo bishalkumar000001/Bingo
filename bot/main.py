@@ -15,7 +15,7 @@ import database as db
 from rooms import cmd_bingo, handle_join_callback, handle_cancel_room_callback, cmd_stopbingo
 from game import handle_card_callback, handle_rematch_callback, _try_unpin, _log
 from economy import award_winner, record_loss
-from leaderboard import build_leaderboard_text
+from leaderboard import build_leaderboard_text, build_leaderboard_keyboard
 from utils import display_name_from_db, display_name
 from models import LINES_TO_WIN, WIN_COINS, OWNER_ID, LOGGER_GROUP_ID, SUPPORT_CHANNEL
 
@@ -84,8 +84,53 @@ async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = await build_leaderboard_text()
-    await update.message.reply_text(text, parse_mode="HTML")
+    chat = update.effective_chat
+    is_group = chat.type in ("group", "supergroup")
+    chat_id = chat.id if is_group else 0
+    scope = "chat" if is_group else "global"
+    time_filter = "all_time"
+
+    chat_title = chat.title if is_group else ""
+    text = await build_leaderboard_text(scope, time_filter, chat_id, chat_title)
+    keyboard = build_leaderboard_keyboard(scope, time_filter, chat_id)
+    await update.message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
+
+
+async def handle_leaderboard_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    data = query.data
+
+    if data == "lb_nochat":
+        await query.answer(
+            "Current Chat leaderboard is only available in group chats!", show_alert=True
+        )
+        return
+
+    parts = data.split(":")
+    if len(parts) < 4:
+        await query.answer()
+        return
+
+    scope = parts[1]
+    time_filter = parts[2]
+    chat_id = int(parts[3])
+
+    chat_title = ""
+    if scope == "chat" and chat_id:
+        try:
+            chat_info = await context.bot.get_chat(chat_id)
+            chat_title = chat_info.title or ""
+        except Exception:
+            pass
+
+    text = await build_leaderboard_text(scope, time_filter, chat_id, chat_title)
+    keyboard = build_leaderboard_keyboard(scope, time_filter, chat_id)
+
+    try:
+        await query.edit_message_text(text, reply_markup=keyboard, parse_mode="HTML")
+    except BadRequest:
+        pass
+    await query.answer()
 
 
 async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -120,6 +165,7 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    chat_id = room["chat_id"]
     opponent_id = (
         room["player2_id"] if user.id == room["player1_id"] else room["player1_id"]
     )
@@ -128,8 +174,8 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await db.finish_room(room["id"])
     await asyncio.gather(
-        award_winner(opponent_id),
-        record_loss(user.id),
+        award_winner(opponent_id, chat_id),
+        record_loss(user.id, chat_id),
     )
 
     forfeit_text = (
@@ -139,9 +185,7 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"💰 Reward: <b>+{WIN_COINS} Coins</b>"
     )
 
-    chat_id = room["chat_id"]
     live_mid = room.get("live_message_id")
-
     if live_mid:
         try:
             await context.bot.edit_message_text(
@@ -286,6 +330,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_card_callback(update, context)
     elif data.startswith("rematch:"):
         await handle_rematch_callback(update, context)
+    elif data.startswith("lb:") or data == "lb_nochat":
+        await handle_leaderboard_callback(update, context)
     else:
         await query.answer()
 
