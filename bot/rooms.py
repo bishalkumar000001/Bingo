@@ -77,82 +77,7 @@ async def cmd_bingo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await placeholder.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
 
 
-async def cmd_bet_bingo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat = update.effective_chat
-    user = update.effective_user
 
-    if chat.type == "private":
-        await update.message.reply_text("⚠️ Use /bet_bingo in a group chat to start a bet match!")
-        return
-
-    if not context.args:
-        await update.message.reply_text(
-            "Usage: /bet_bingo <amount>\nExample: /bet_bingo 100"
-        )
-        return
-
-    try:
-        stake_amount = int(context.args[0])
-    except ValueError:
-        await update.message.reply_text("❌ Bet amount must be a whole number of coins.")
-        return
-
-    if stake_amount <= 0:
-        await update.message.reply_text("❌ Bet amount must be greater than 0.")
-        return
-
-    player = await db.get_user(user.id)
-    if not player:
-        await update.message.reply_text(
-            "❌ You need to register first! Send /start to me in a private chat."
-        )
-        return
-
-    if player["coins"] < stake_amount:
-        await update.message.reply_text(
-            f"❌ You need at least {stake_amount} coins to create this bet room."
-        )
-        return
-
-    if await db.is_player_in_active_room(user.id):
-        await update.message.reply_text(
-            "❌ You are already in an active match! Finish it first."
-        )
-        return
-
-    active_rooms = await db.get_active_rooms_in_chat(chat.id)
-    if len(active_rooms) >= MAX_ROOMS_PER_CHAT:
-        await update.message.reply_text(
-            f"❌ This group already has {MAX_ROOMS_PER_CHAT} active rooms running.\n"
-            "Wait for a match to finish!"
-        )
-        return
-
-    room_number = await db.get_next_room_number(chat.id)
-    if room_number == -1:
-        await update.message.reply_text("❌ No room slots available!")
-        return
-
-    player_name = display_name(user)
-    placeholder = await update.message.reply_text("🎮 Creating bet room...")
-
-    room_id = await db.create_room(
-        chat_id=chat.id,
-        room_number=room_number,
-        player1_id=user.id,
-        room_message_id=placeholder.message_id,
-        stake_amount=stake_amount,
-    )
-
-    text = (
-        f"🎮 <b>Velocity Bingo — Room #{room_number}</b>\n\n"
-        f"👤 Player 1: {player_name}\n"
-        f"💸 Bet: <b>{stake_amount}</b> coins\n\n"
-        f"⏳ Waiting for an opponent...\n"
-        f"👥 Players: 1 / 2"
-    )
-    keyboard = build_waiting_keyboard(room_id)
-    await placeholder.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
 
 
 async def handle_join_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -189,13 +114,7 @@ async def handle_join_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         return
 
-    stake_amount = room.get("stake_amount", 0) or 0
-    if stake_amount > 0 and player["coins"] < stake_amount:
-        await query.answer(
-            f"❌ You need at least {stake_amount} coins to join this bet match.",
-            show_alert=True,
-        )
-        return
+
 
     await query.answer("🎮 Joining match...")
     await db.join_room(room_id, user.id)
