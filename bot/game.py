@@ -16,7 +16,7 @@ from cards import (
     build_group_turn_keyboard,
     build_group_waiting_text,
 )
-from economy import award_winner, record_loss
+from economy import award_winner, record_loss, settle_bet_result
 from models import WIN_COINS, LINES_TO_WIN, LOGGER_GROUP_ID, SUPPORT_CHANNEL
 from utils import display_name_from_db, format_called_numbers
 
@@ -66,6 +66,7 @@ def build_live_message(room: dict, p1: dict, p2: dict) -> str:
     turn_name = p1_name if room["current_turn"] == room["player1_id"] else p2_name
     phase = room.get("phase", "call")
     last_called = room.get("last_called_number")
+    stake_amount = room.get("stake_amount", 0) or 0
 
     if phase == "call":
         status = f"🎯 <b>{turn_name}</b> is choosing a number..."
@@ -79,6 +80,7 @@ def build_live_message(room: dict, p1: dict, p2: dict) -> str:
         f"👤 Player 1: {p1_name}",
         f"👤 Player 2: {p2_name}",
         "",
+        f"💸 Bet: <b>{stake_amount}</b> coins" if stake_amount > 0 else "",
         f"🎯 Turn: <b>{turn_name}</b>",
         f"📢 Last Called: <b>{last_called if last_called else 'None'}</b>",
         f"📋 Called: {called_str}",
@@ -495,24 +497,40 @@ async def handle_bingo_win(context, room, winner_id, p1, p2, called):
     chat_id = room["chat_id"]
     loser_id = room["player2_id"] if winner_id == room["player1_id"] else room["player1_id"]
     await db.finish_room(room["id"])
-    await asyncio.gather(
-        award_winner(winner_id, chat_id),
-        record_loss(loser_id, chat_id),
-    )
+    stake_amount = room.get("stake_amount", 0) or 0
+    if stake_amount > 0:
+        await settle_bet_result(winner_id, loser_id, stake_amount, chat_id)
+    else:
+        await asyncio.gather(
+            award_winner(winner_id, chat_id),
+            record_loss(loser_id, chat_id),
+        )
 
     winner = p1 if winner_id == room["player1_id"] else p2
     loser = p2 if winner_id == room["player1_id"] else p1
     winner_name = display_name_from_db(winner)
     loser_name = display_name_from_db(loser)
 
-    win_text = (
-        f"🏆 <b>BINGO!</b>\n\n"
-        f"🥇 Winner: <b>{winner_name}</b>\n"
-        f"😔 Loser: <b>{loser_name}</b>\n"
-        f"🏠 Room: <b>#{room['room_number']}</b>\n"
-        f"💰 Reward: <b>+{WIN_COINS} Coins</b>\n\n"
-        f"📋 Numbers called: {format_called_numbers(called)}"
-    )
+    stake_amount = room.get("stake_amount", 0) or 0
+    if stake_amount > 0:
+        win_text = (
+            f"🏆 <b>BINGO!</b>\n\n"
+            f"🥇 Winner: <b>{winner_name}</b>\n"
+            f"😔 Loser: <b>{loser_name}</b>\n"
+            f"🏠 Room: <b>#{room['room_number']}</b>\n"
+            f"💸 Bet: <b>{stake_amount}</b> coins\n"
+            f"💰 Result: <b>Winner +{stake_amount * 2}</b> / <b>Loser -{stake_amount}</b>\n\n"
+            f"📋 Numbers called: {format_called_numbers(called)}"
+        )
+    else:
+        win_text = (
+            f"🏆 <b>BINGO!</b>\n\n"
+            f"🥇 Winner: <b>{winner_name}</b>\n"
+            f"😔 Loser: <b>{loser_name}</b>\n"
+            f"🏠 Room: <b>#{room['room_number']}</b>\n"
+            f"💰 Reward: <b>+{WIN_COINS} Coins</b>\n\n"
+            f"📋 Numbers called: {format_called_numbers(called)}"
+        )
 
     rematch_kb = InlineKeyboardMarkup([[
         InlineKeyboardButton("🔄 Rematch!", callback_data=f"rematch:{room['id']}")
@@ -575,7 +593,10 @@ async def handle_bingo_win(context, room, winner_id, p1, p2, called):
     for pid in (room["player1_id"], room["player2_id"]):
         card = await db.get_card(room["id"], pid)
         is_winner = pid == winner_id
-        result = "🏆 You won! +500 coins added." if is_winner else "😔 You lost. Better luck next time!"
+        if stake_amount > 0:
+            result = f"🏆 You won! +{stake_amount * 2} coins added." if is_winner else f"😔 You lost. -{stake_amount} coins deducted."
+        else:
+            result = "🏆 You won! +500 coins added." if is_winner else "😔 You lost. Better luck next time!"
         final_dm = (
             f"🏁 <b>Game Over — Room #{room['room_number']}</b>\n\n"
             f"{result}\n"

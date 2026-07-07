@@ -101,7 +101,7 @@ async def is_player_in_active_room(player_id: int) -> bool:
 
 
 async def create_room(chat_id: int, room_number: int, player1_id: int,
-                      room_message_id: int) -> str:
+                      room_message_id: int, stake_amount: int = 0) -> str:
     result = await _col("rooms").insert_one({
         "room_number": room_number,
         "chat_id": chat_id,
@@ -114,6 +114,7 @@ async def create_room(chat_id: int, room_number: int, player1_id: int,
         "called_numbers": [],
         "live_message_id": None,
         "room_message_id": room_message_id,
+        "stake_amount": stake_amount,
         "created_at": datetime.now(timezone.utc),
     })
     return str(result.inserted_id)

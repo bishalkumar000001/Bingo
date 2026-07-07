@@ -12,9 +12,9 @@ from telegram.ext import (
 from telegram.error import BadRequest, Forbidden
 
 import database as db
-from rooms import cmd_bingo, handle_join_callback, handle_cancel_room_callback, cmd_stopbingo
+from rooms import cmd_bingo, cmd_bet_bingo, handle_join_callback, handle_cancel_room_callback, cmd_stopbingo
 from game import handle_card_callback, handle_rematch_callback, _try_unpin, _log
-from economy import award_winner, record_loss
+from economy import award_winner, record_loss, settle_bet_result
 from leaderboard import build_leaderboard_text, build_leaderboard_keyboard
 from utils import display_name_from_db, display_name
 from models import LINES_TO_WIN, WIN_COINS, OWNER_ID, LOGGER_GROUP_ID, SUPPORT_CHANNEL
@@ -43,6 +43,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"6️⃣ First to complete <b>{LINES_TO_WIN} lines</b> wins!\n\n"
         "<b>Commands:</b>\n"
         "/bingo — Create a new match (in a group)\n"
+        "/bet_bingo <amount> — Start a coin bet match\n"
         "/cancel — Forfeit your current game\n"
         "/profile — View your stats\n"
         "/leaderboard — See top players\n"
@@ -173,10 +174,14 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     opponent_name = display_name_from_db(opponent) if opponent else "Opponent"
 
     await db.finish_room(room["id"])
-    await asyncio.gather(
-        award_winner(opponent_id, chat_id),
-        record_loss(user.id, chat_id),
-    )
+    stake_amount = room.get("stake_amount", 0) or 0
+    if stake_amount > 0:
+        await settle_bet_result(opponent_id, user.id, stake_amount, chat_id)
+    else:
+        await asyncio.gather(
+            award_winner(opponent_id, chat_id),
+            record_loss(user.id, chat_id),
+        )
 
     forfeit_text = (
         f"🏳️ <b>Forfeit — Room #{room['room_number']}</b>\n\n"
@@ -355,6 +360,7 @@ def main():
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("bingo", cmd_bingo))
+    app.add_handler(CommandHandler("bet_bingo", cmd_bet_bingo))
     app.add_handler(CommandHandler("cancel", cmd_cancel))
     app.add_handler(CommandHandler("profile", cmd_profile))
     app.add_handler(CommandHandler("leaderboard", cmd_leaderboard))
