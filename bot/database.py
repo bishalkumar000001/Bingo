@@ -288,3 +288,31 @@ async def get_player_active_room(player_id: int) -> Optional[Dict]:
         "$or": [{"player1_id": player_id}, {"player2_id": player_id}],
     })
     return _to_dict(doc)
+
+
+async def transfer_coins(from_id: int, to_id: int, amount: int) -> bool:
+    """Transfer coins from one user to another. Returns True if successful."""
+    sender = await get_user(from_id)
+    receiver = await get_user(to_id)
+    
+    if not sender or not receiver:
+        return False
+    
+    if sender["coins"] < amount:
+        return False
+    
+    await _col("users").update_one(
+        {"telegram_id": from_id},
+        {"$inc": {"coins": -amount}},
+    )
+    await _col("users").update_one(
+        {"telegram_id": to_id},
+        {"$inc": {"coins": amount}},
+    )
+    return True
+
+
+async def find_user_by_username(username: str) -> Optional[Dict]:
+    """Find a user by username."""
+    doc = await _col("users").find_one({"username": username})
+    return _to_dict(doc)

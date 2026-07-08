@@ -46,6 +46,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/cancel — Forfeit your current game\n"
         "/profile — View your stats\n"
         "/leaderboard — See top players\n"
+        "/give — Transfer coins to another player\n"
         "/stopbingo — Cancel all rooms (admins only)\n\n"
         "✅ You're registered! Go add me to a group and start playing.",
         parse_mode="HTML",
@@ -271,6 +272,97 @@ async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
 
 
+async def cmd_give(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    
+    # Check if user is registered
+    sender = await db.get_user(user.id)
+    if not sender:
+        await update.message.reply_text("❌ You're not registered yet! Send /start first.")
+        return
+    
+    # Parse arguments: /give @username amount or /give user_id amount
+    if not context.args or len(context.args) < 2:
+        await update.message.reply_text(
+            "Usage:\n"
+            "/give @username <amount>\n"
+            "/give <user_id> <amount>\n\n"
+            f"Your coins: 💰 <b>{sender['coins']:,}</b>",
+            parse_mode="HTML",
+        )
+        return
+    
+    recipient_input = context.args[0]
+    try:
+        amount = int(context.args[1])
+    except ValueError:
+        await update.message.reply_text("❌ Amount must be a number!")
+        return
+    
+    if amount <= 0:
+        await update.message.reply_text("❌ Amount must be greater than 0!")
+        return
+    
+    if sender["coins"] < amount:
+        await update.message.reply_text(
+            f"❌ You don't have enough coins!\n"
+            f"You have: 💰 <b>{sender['coins']:,}</b>\n"
+            f"Trying to give: 💰 <b>{amount:,}</b>",
+            parse_mode="HTML",
+        )
+        return
+    
+    # Try to find recipient
+    recipient = None
+    
+    # If input looks like a user ID (digits)
+    if recipient_input.isdigit():
+        recipient_id = int(recipient_input)
+        recipient = await db.get_user(recipient_id)
+    # If input is a username
+    elif recipient_input.startswith("@"):
+        username = recipient_input[1:]
+        # Search for user with this username
+        # We need to add this to the database
+        cursor = await db.find_user_by_username(username)
+        if cursor:
+            recipient = cursor
+    
+    if not recipient:
+        await update.message.reply_text("❌ Recipient not found! Use @username or user_id")
+        return
+    
+    if recipient["telegram_id"] == user.id:
+        await update.message.reply_text("❌ You can't give coins to yourself!")
+        return
+    
+    # Transfer coins
+    success = await db.transfer_coins(user.id, recipient["telegram_id"], amount)
+    
+    if not success:
+        await update.message.reply_text("❌ Transfer failed!")
+        return
+    
+    recipient_name = display_name_from_db(recipient)
+    
+    await update.message.reply_text(
+        f"✅ Transfer successful!\n\n"
+        f"Sent: 💰 <b>{amount:,}</b> coins\n"
+        f"To: <b>{recipient_name}</b>",
+        parse_mode="HTML",
+    )
+    
+    try:
+        sender_name = display_name_from_db(sender)
+        await context.bot.send_message(
+            chat_id=recipient["telegram_id"],
+            text=f"🎁 <b>{sender_name}</b> sent you 💰 <b>{amount:,}</b> coins!",
+            parse_mode="HTML",
+        )
+    except (Forbidden, BadRequest):
+        pass
+
+
 async def handle_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not LOGGER_GROUP_ID:
         return
@@ -360,6 +452,7 @@ def main():
     app.add_handler(CommandHandler("leaderboard", cmd_leaderboard))
     app.add_handler(CommandHandler("stopbingo", cmd_stopbingo))
     app.add_handler(CommandHandler("broadcast", cmd_broadcast))
+    app.add_handler(CommandHandler("give", cmd_give))
     app.add_handler(ChatMemberHandler(handle_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
     app.add_handler(CallbackQueryHandler(handle_callback))
 

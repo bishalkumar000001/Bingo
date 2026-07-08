@@ -77,14 +77,8 @@ async def build_leaderboard_text(
     lines = [header]
     for rank, row in enumerate(rows, start=1):
         name = _name(row)
-        wins = row.get("wins", 0)
         coins = row.get("coins", 0)
-        games = row.get("games_played", 0)
-        win_rate = (wins / games * 100) if games > 0 else 0.0
         lines.append(
-            f"{medal(rank)} <b>{name}</b>\n"
-            f"   🏅 Wins: {wins}  |  💰 Coins: {coins:,}\n"
-            f"   🎮 Games: {games}  |  📈 Win Rate: {win_rate:.1f}%\n"
-            f"{'─' * 28}"
+            f"{medal(rank)} <b>{name}</b>  💰 {coins:,}"
         )
     return "\n".join(lines)
