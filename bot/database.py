@@ -196,7 +196,7 @@ def _time_filter_start(time_filter: str) -> Optional[datetime]:
 async def get_leaderboard(limit: int = 10) -> List[Dict]:
     pipeline = [
         {"$match": {"games_played": {"$gt": 0}}},
-        {"$sort": {"wins": -1, "coins": -1}},
+        {"$sort": {"coins": -1, "wins": -1}},
         {"$limit": limit},
     ]
     cursor = _col("users").aggregate(pipeline)
@@ -222,8 +222,6 @@ async def get_leaderboard_filtered(
     pipeline = [
         {"$match": match},
         {"$group": {"_id": "$telegram_id", "wins": {"$sum": 1}}},
-        {"$sort": {"wins": -1}},
-        {"$limit": limit},
         {"$lookup": {
             "from": "users",
             "localField": "_id",
@@ -240,6 +238,8 @@ async def get_leaderboard_filtered(
             "coins": "$user_doc.coins",
             "games_played": "$user_doc.games_played",
         }},
+        {"$sort": {"coins": -1, "wins": -1}},
+        {"$limit": limit},
     ]
 
     cursor = _col("game_results").aggregate(pipeline)
