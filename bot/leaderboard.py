@@ -60,7 +60,7 @@ async def build_leaderboard_text(
     if scope == "chat" and chat_title:
         scope_label = f"📍 {chat_title}"
 
-    header = f"🏆 <b>Velocity Bingo — Leaderboard</b>\n{scope_label}  |  {time_label}\n"
+    header = f"🏆 <b>Velocity Bingo — Leaderboard</b> 🏆\n{scope_label}  |  {time_label}\n"
 
     if not rows:
         period_map = {
@@ -74,11 +74,22 @@ async def build_leaderboard_text(
         where = "in this chat" if scope == "chat" else "globally"
         return header + f"\n📭 No scores recorded {where} {period_str}."
 
-    lines = [header]
+    lines = [header, "━━━━━━━━━━━━━━━━━━━━"]
+    emojis = ["💎", "👑", "⭐", "✨", "🌟", "💫", "🎯", "🎖️", "🏅", "🎁"]
+    
     for rank, row in enumerate(rows, start=1):
         name = _name(row)
         coins = row.get("coins", 0)
-        lines.append(
-            f"{medal(rank)} <b>{name}</b>  💰 {coins:,}"
-        )
+        emoji = emojis[(rank - 1) % len(emojis)]
+        
+        if rank == 1:
+            lines.append(f"🥇 <b>{name}</b> {emoji} 💰 <b>{coins:,}</b>")
+        elif rank == 2:
+            lines.append(f"🥈 <b>{name}</b> {emoji} 💰 <b>{coins:,}</b>")
+        elif rank == 3:
+            lines.append(f"🥉 <b>{name}</b> {emoji} 💰 <b>{coins:,}</b>")
+        else:
+            lines.append(f"{rank}. <b>{name}</b> {emoji} 💰 <b>{coins:,}</b>")
+    
+    lines.append("━━━━━━━━━━━━━━━━━━━━")
     return "\n".join(lines)
