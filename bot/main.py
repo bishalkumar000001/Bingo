@@ -72,14 +72,17 @@ async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     coins = player["coins"]
 
     await update.message.reply_text(
-        f"👤 <b>Profile — {name}</b>\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"👤 <b>Profile — {name}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
         f"💰 Coins: <b>{coins:,}</b>\n"
         f"🎮 Games Played: <b>{games}</b>\n"
         f"🏆 Wins: <b>{wins}</b>\n"
         f"😔 Losses: <b>{losses}</b>\n"
         f"📈 Win Rate: <b>{win_rate:.1f}%</b>\n"
         f"🔥 Current Streak: <b>{streak}</b>\n"
-        f"⭐ Longest Streak: <b>{longest}</b>",
+        f"⭐ Longest Streak: <b>{longest}</b>\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━",
         parse_mode="HTML",
     )
 
@@ -263,9 +266,12 @@ async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         await status_msg.edit_text(
-            f"✅ Broadcast complete!\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"📡 <b>Broadcast Complete!</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
             f"📨 Sent: <b>{sent}</b>\n"
-            f"❌ Failed: <b>{failed}</b>",
+            f"❌ Failed: <b>{failed}</b>\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━",
             parse_mode="HTML",
         )
     except BadRequest:
