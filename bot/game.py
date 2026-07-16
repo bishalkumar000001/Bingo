@@ -165,7 +165,7 @@ async def send_dm_card(
             except BadRequest as e:
                 if "Message is not modified" in str(e):
                     return True
-                        pass
+
         msg = await context.bot.send_message(
             chat_id=player_id, text=text, reply_markup=keyboard, parse_mode="HTML"
         )
