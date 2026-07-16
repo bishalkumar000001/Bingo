@@ -217,9 +217,12 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except (Forbidden, BadRequest):
         pass
 
-    await update.message.reply_text(
-        f"🏳️ You have forfeited <b>Room #{room['room_number']}</b>.\n"
-        f"{opponent_name} wins.",
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=(
+            f"🏳️ You have forfeited <b>Room #{room['room_number']}</b>.\n"
+            f"{opponent_name} wins."
+        ),
         parse_mode="HTML",
     )
 
