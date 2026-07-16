@@ -391,6 +391,11 @@ def _render_bingo_card_image(
 
 async def handle_card_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    try:
+        await query.answer()
+    except Exception:
+        pass
+        
     parts = query.data.split(":")
     if len(parts) != 3:
         await query.answer()
@@ -485,11 +490,21 @@ async with ROOM_LOCKS[room_id]:
         marker_name = p2_name if player_id == room["player1_id"] else p1_name
 
         await asyncio.gather(
-            update_live_message(context, room, p1, p2),
             send_dm_card(context, room, player_id, caller_name, marker_name, False, False),
             send_dm_card(context, room, marker_id, marker_name, caller_name, False, True),
         )
-        await update_group_turn_panel(context, room, marker_id, marker_name, caller_name)
+
+        room = await db.get_room(room_id)
+
+        await update_live_message(context, room, p1, p2)
+
+        await update_group_turn_panel(
+            context,
+            room,
+            marker_id,
+            marker_name,
+            caller_name,
+        )
 
     elif phase == "mark":
         marker_id = (
@@ -529,17 +544,54 @@ async with ROOM_LOCKS[room_id]:
         other_id = room["player2_id"] if player_id == room["player1_id"] else room["player1_id"]
 
         await asyncio.gather(
-            update_live_message(context, room, p1, p2),
-            send_dm_card(context, room, player_id, marker_name, caller_name, True, False),
-            send_dm_card(context, room, other_id, caller_name, marker_name, False, False),
+            send_dm_card(context, room, player_id, caller_name, marker_name, False, False),
+            send_dm_card(context, room, marker_id, marker_name, caller_name, False, True),
         )
-        await update_group_turn_panel(context, room, player_id, marker_name, caller_name)
+
+        room = await db.get_room(room_id)
+
+        await update_live_message(context, room, p1, p2)
+
+        await update_group_turn_panel(
+            context,
+            room,
+            marker_id,
+            marker_name,
+            caller_name,
+        )
 
 
 async def handle_bingo_win(context, room, winner_id, p1, p2, called):
     chat_id = room["chat_id"]
     loser_id = room["player2_id"] if winner_id == room["player1_id"] else room["player1_id"]
     await db.finish_room(room["id"])
+    if room.get("last_call_message_id"):
+        try:
+            await context.bot.delete_message(
+                room["chat_id"],
+                room["last_call_message_id"],
+            )
+        except Exception:
+            pass
+
+    if room.get("live_message_id"):
+        try:
+            await context.bot.delete_message(
+                room["chat_id"],
+                room["live_message_id"],
+            )
+        except Exception:
+            pass
+
+    if room.get("group_panel_message_id"):
+        try:
+            await context.bot.delete_message(
+                room["chat_id"],
+                room["group_panel_message_id"],
+            )
+        except Exception:
+            pass
+    
     await asyncio.gather(
         award_winner(winner_id, chat_id),
         record_loss(loser_id, chat_id),
