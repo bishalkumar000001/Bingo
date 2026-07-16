@@ -418,18 +418,18 @@ async def handle_card_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.answer("🚫 You are not in this game!", show_alert=True)
         return
 
-async with ROOM_LOCKS[room_id]:
-    room = await db.get_room(room_id)
+    async with ROOM_LOCKS[room_id]:
+        room = await db.get_room(room_id)
     
-    called = room.get("called_numbers") or []
-    phase = room.get("phase", "call")
-    caller_id = room["current_turn"]
-    last_called = room.get("last_called_number")
+        called = room.get("called_numbers") or []
+        phase = room.get("phase", "call")
+        caller_id = room["current_turn"]
+        last_called = room.get("last_called_number")
     
-    p1 = await db.get_user(room["player1_id"])
-    p2 = await db.get_user(room["player2_id"])
-    p1_name = display_name_from_db(p1)
-    p2_name = display_name_from_db(p2)
+        p1 = await db.get_user(room["player1_id"])
+        p2 = await db.get_user(room["player2_id"])
+        p1_name = display_name_from_db(p1)
+        p2_name = display_name_from_db(p2)
 
     if phase == "call":
         if player_id != caller_id:
