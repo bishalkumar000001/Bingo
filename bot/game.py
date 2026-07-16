@@ -1,5 +1,6 @@
 import asyncio
 import io
+from collections import defaultdict
 from typing import Optional
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -19,6 +20,8 @@ from cards import (
 from economy import award_winner, record_loss
 from models import WIN_COINS, LINES_TO_WIN, LOGGER_GROUP_ID, SUPPORT_CHANNEL
 from utils import display_name_from_db, format_called_numbers
+
+ROOM_LOCKS = defaultdict(asyncio.Lock)
 
 
 def _msg_link(chat_id: int, message_id: int) -> str:
@@ -88,17 +91,26 @@ def build_live_message(room: dict, p1: dict, p2: dict) -> str:
 
 
 async def _try_edit(context, chat_id, message_id, text, keyboard=None):
-    try:
-        await context.bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=message_id,
-            text=text,
-            reply_markup=keyboard,
-            parse_mode="HTML",
-        )
-        return True
-    except BadRequest:
-        return False
+    for _ in range(3):
+        try:
+            await context.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=text,
+                reply_markup=keyboard,
+                parse_mode="HTML",
+            )
+            return True
+        except BadRequest as e:
+            if "Message is not modified" in str(e):
+                return True
+
+            await asynsio.sleep(0.5)
+
+        except Exception:
+            await asynsio.sleep(0.5)
+            
+    return False
 
 
 async def send_dm_card(
@@ -150,8 +162,10 @@ async def send_dm_card(
                     parse_mode="HTML",
                 )
                 return True
-            except BadRequest:
-                pass
+            except BadRequest as e:
+                if "Message is not modified" in str(e):
+                    return True
+                        pass
         msg = await context.bot.send_message(
             chat_id=player_id, text=text, reply_markup=keyboard, parse_mode="HTML"
         )
@@ -197,13 +211,19 @@ async def update_group_turn_panel(
 
 
 async def update_live_message(context, room, p1, p2):
+    text = build_live_message(room, p1, p2)
     if not room.get("live_message_id"):
-        return
+        if await _try_edit(
+            context,
+            room["chat_id"],
+            room["live_message_id"],
+            text,
+        ):
+            return
     try:
-        await context.bot.edit_message_text(
+        msg = await context.bot.edit_message_text(
             chat_id=room["chat_id"],
-            message_id=room["live_message_id"],
-            text=build_live_message(room, p1, p2),
+            text=text,
             parse_mode="HTML",
         )
     except BadRequest:
@@ -393,10 +413,14 @@ async def handle_card_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.answer("🚫 You are not in this game!", show_alert=True)
         return
 
+async with ROOM_LOCKS[room_id]:
+    room = await db.get_room(room_id)
+    
     called = room.get("called_numbers") or []
     phase = room.get("phase", "call")
     caller_id = room["current_turn"]
     last_called = room.get("last_called_number")
+    
     p1 = await db.get_user(room["player1_id"])
     p2 = await db.get_user(room["player2_id"])
     p1_name = display_name_from_db(p1)
@@ -433,11 +457,27 @@ async def handle_card_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
         caller_name = display_name_from_db(p1 if room["player1_id"] == player_id else p2)
 
-        await context.bot.send_message(
+        old_call = room.get("last_call_message_id")
+
+        if old_call:
+            try:
+                await context.bot.delete_message(
+                    chat_id=room["chat_id"],
+                    message_id=old_call,
+                )
+            except Exception:
+                pass
+
+        msg = await context.bot.send_message(
             chat_id=room["chat_id"],
             text=f"🎲 <b>Room #{room['room_number']}</b> — {caller_name} called <b>{number}</b>!",
             reply_markup=_open_card_kb(context.bot.username),
             parse_mode="HTML",
+        )
+
+        await db.update_room(
+            room_id,
+            last_call_message_id=msg.message_id,
         )
 
         room = await db.get_room(room_id)
