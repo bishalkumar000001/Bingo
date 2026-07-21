@@ -222,21 +222,53 @@ async def get_leaderboard_filtered(
     """
     Leaderboard filtered by scope (global / chat) and time period.
 
-    - scope="global", time_filter="all_time": total coins held (from users collection)
-    - all other combos: coins EARNED in the given period (from game_results.coins_earned)
+    All-time views (today/week/month/year):
+      - Shows coins EARNED in that period (game_results.coins_earned).
+      - Old records without coins_earned show 0 but still appear if they
+        have at least 1 win in the period (backward-compatible).
 
-    Each row has: telegram_id, username, first_name, coins (earned in period).
+    All-time views:
+      - global all_time: total coins held, from users collection.
+      - chat   all_time: players who ever played in this chat, ranked by
+                         their total coins held (users collection).
     """
 
-    # Special case: global all-time → use total coins on the user record
-    if scope == "global" and time_filter == "all_time":
-        rows = await get_leaderboard(limit)
-        # Rename field so the display layer uses a consistent key
-        for r in rows:
-            r["coins_earned"] = r.get("coins", 0)
-        return rows
+    # ── All Time: use users collection so past data is always visible ──────
+    if time_filter == "all_time":
+        if scope == "global":
+            rows = await get_leaderboard(limit)
+            for r in rows:
+                r["coins_earned"] = r.get("coins", 0)
+            return rows
 
-    # All other cases: sum coins_earned from game_results
+        # chat + all_time: rank players who played in this chat by total coins
+        if scope == "chat" and chat_id:
+            pipeline = [
+                {"$match": {"chat_id": chat_id}},
+                {"$group": {"_id": "$telegram_id"}},
+                {"$lookup": {
+                    "from": "users",
+                    "localField": "_id",
+                    "foreignField": "telegram_id",
+                    "as": "user_doc",
+                }},
+                {"$unwind": "$user_doc"},
+                {"$project": {
+                    "_id": 0,
+                    "telegram_id": "$_id",
+                    "coins_earned": "$user_doc.coins",
+                    "wins": "$user_doc.wins",
+                    "username": "$user_doc.username",
+                    "first_name": "$user_doc.first_name",
+                }},
+                {"$match": {"coins_earned": {"$gt": 0}}},
+                {"$sort": {"coins_earned": -1, "wins": -1}},
+                {"$limit": limit},
+            ]
+            cursor = _col("game_results").aggregate(pipeline)
+            return await cursor.to_list(length=limit)
+
+    # ── Time-filtered (today / week / month / year) ─────────────────────────
     match: Dict = {}
 
     if scope == "chat" and chat_id:
@@ -250,11 +282,13 @@ async def get_leaderboard_filtered(
         {"$match": match},
         {"$group": {
             "_id": "$telegram_id",
+            # coins_earned is 0 on old records — $ifNull handles missing field
             "coins_earned": {"$sum": {"$ifNull": ["$coins_earned", 0]}},
             "wins": {"$sum": {"$cond": ["$won", 1, 0]}},
         }},
-        # Only show players who earned at least 1 coin in this period
-        {"$match": {"coins_earned": {"$gt": 0}}},
+        # Keep players who won at least once OR earned coins in this period
+        # (wins > 0 covers old records that predate the coins_earned field)
+        {"$match": {"$or": [{"wins": {"$gt": 0}}, {"coins_earned": {"$gt": 0}}]}},
         {"$lookup": {
             "from": "users",
             "localField": "_id",
