@@ -171,11 +171,18 @@ async def update_card_message_id(card_id: str, message_id: int):
     )
 
 
-async def log_game_result(telegram_id: int, chat_id: int, won: bool):
+async def log_game_result(telegram_id: int, chat_id: int, won: bool, coins_earned: int = 0):
+    """
+    Record the outcome of a game.
+    coins_earned: net coins gained this game (e.g. WIN_COINS + stake for winner,
+                  or -stake for loser). Pass 0 for no-stake losses.
+    Old records without coins_earned default to 0 in aggregations.
+    """
     await _col("game_results").insert_one({
         "telegram_id": telegram_id,
         "chat_id": chat_id,
         "won": won,
+        "coins_earned": coins_earned,
         "created_at": datetime.now(timezone.utc),
     })
 
@@ -195,6 +202,7 @@ def _time_filter_start(time_filter: str) -> Optional[datetime]:
 
 
 async def get_leaderboard(limit: int = 10) -> List[Dict]:
+    """All-time global leaderboard by total coins held."""
     pipeline = [
         {"$match": {"games_played": {"$gt": 0}}},
         {"$sort": {"coins": -1, "wins": -1}},
@@ -206,12 +214,30 @@ async def get_leaderboard(limit: int = 10) -> List[Dict]:
 
 
 async def get_leaderboard_filtered(
-    scope: str, chat_id: int, time_filter: str, limit: int = 10
+    scope: str,
+    chat_id: int,
+    time_filter: str,
+    limit: int = 10,
 ) -> List[Dict]:
-    if scope == "global" and time_filter == "all_time":
-        return await get_leaderboard(limit)
+    """
+    Leaderboard filtered by scope (global / chat) and time period.
 
-    match: Dict = {"won": True}
+    - scope="global", time_filter="all_time": total coins held (from users collection)
+    - all other combos: coins EARNED in the given period (from game_results.coins_earned)
+
+    Each row has: telegram_id, username, first_name, coins (earned in period).
+    """
+
+    # Special case: global all-time → use total coins on the user record
+    if scope == "global" and time_filter == "all_time":
+        rows = await get_leaderboard(limit)
+        # Rename field so the display layer uses a consistent key
+        for r in rows:
+            r["coins_earned"] = r.get("coins", 0)
+        return rows
+
+    # All other cases: sum coins_earned from game_results
+    match: Dict = {}
 
     if scope == "chat" and chat_id:
         match["chat_id"] = chat_id
@@ -222,7 +248,13 @@ async def get_leaderboard_filtered(
 
     pipeline = [
         {"$match": match},
-        {"$group": {"_id": "$telegram_id", "wins": {"$sum": 1}}},
+        {"$group": {
+            "_id": "$telegram_id",
+            "coins_earned": {"$sum": {"$ifNull": ["$coins_earned", 0]}},
+            "wins": {"$sum": {"$cond": ["$won", 1, 0]}},
+        }},
+        # Only show players who earned at least 1 coin in this period
+        {"$match": {"coins_earned": {"$gt": 0}}},
         {"$lookup": {
             "from": "users",
             "localField": "_id",
@@ -233,13 +265,12 @@ async def get_leaderboard_filtered(
         {"$project": {
             "_id": 0,
             "telegram_id": "$_id",
+            "coins_earned": 1,
             "wins": 1,
             "username": "$user_doc.username",
             "first_name": "$user_doc.first_name",
-            "coins": "$user_doc.coins",
-            "games_played": "$user_doc.games_played",
         }},
-        {"$sort": {"coins": -1, "wins": -1}},
+        {"$sort": {"coins_earned": -1, "wins": -1}},
         {"$limit": limit},
     ]
 
@@ -295,13 +326,13 @@ async def transfer_coins(from_id: int, to_id: int, amount: int) -> bool:
     """Transfer coins from one user to another. Returns True if successful."""
     sender = await get_user(from_id)
     receiver = await get_user(to_id)
-    
+
     if not sender or not receiver:
         return False
-    
+
     if sender["coins"] < amount:
         return False
-    
+
     await _col("users").update_one(
         {"telegram_id": from_id},
         {"$inc": {"coins": -amount}},
@@ -317,3 +348,4 @@ async def find_user_by_username(username: str) -> Optional[Dict]:
     """Find a user by username."""
     doc = await _col("users").find_one({"username": username})
     return _to_dict(doc)
+
