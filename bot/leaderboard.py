@@ -1,15 +1,27 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from database import get_leaderboard_filtered
-from utils import medal
 
 SCOPE_ICONS = {"global": "🌐 Global", "chat": "📍 Current Chat"}
 TIME_ICONS = {
     "today": "🟡 Today",
-    "week": "🟡 Week",
-    "month": "🔵 Month",
-    "year": "🟣 Year",
+    "week": "🟢 This Week",
+    "month": "🔵 This Month",
+    "year": "🟣 This Year",
     "all_time": "🏆 All Time",
+}
+# Label shown next to coins depending on scope+period
+COINS_LABEL = {
+    ("global", "today"):    "earned today (all groups)",
+    ("global", "week"):     "earned this week (all groups)",
+    ("global", "month"):    "earned this month (all groups)",
+    ("global", "year"):     "earned this year (all groups)",
+    ("global", "all_time"): "total coins",
+    ("chat", "today"):      "earned today (this chat)",
+    ("chat", "week"):       "earned this week (this chat)",
+    ("chat", "month"):      "earned this month (this chat)",
+    ("chat", "year"):       "earned this year (this chat)",
+    ("chat", "all_time"):   "earned all time (this chat)",
 }
 
 
@@ -22,19 +34,19 @@ def build_leaderboard_keyboard(scope: str, time_filter: str, chat_id: int) -> In
         )
 
     if chat_id:
-        chat_btn = _btn("chat", time_filter, "📍 Current Chat")
+        chat_btn = _btn("chat", time_filter, "📍 This Chat")
     else:
-        chat_btn = InlineKeyboardButton("📍 Current Chat", callback_data="lb_nochat")
+        chat_btn = InlineKeyboardButton("📍 This Chat", callback_data="lb_nochat")
 
     return InlineKeyboardMarkup([
         [chat_btn, _btn("global", time_filter, "🌐 Global")],
         [
-            _btn(scope, "today", "🟡 Today"),
-            _btn(scope, "week", "🟡 Week"),
-            _btn(scope, "month", "🔵 Month"),
+            _btn(scope, "today",    "🟡 Today"),
+            _btn(scope, "week",     "🟢 Week"),
+            _btn(scope, "month",    "🔵 Month"),
         ],
         [
-            _btn(scope, "year", "🟣 Year"),
+            _btn(scope, "year",     "🟣 Year"),
             _btn(scope, "all_time", "🏆 All Time"),
         ],
     ])
@@ -55,41 +67,50 @@ async def build_leaderboard_text(
     rows = await get_leaderboard_filtered(scope, chat_id, time_filter)
 
     scope_label = SCOPE_ICONS[scope]
-    time_label = TIME_ICONS[time_filter]
-
     if scope == "chat" and chat_title:
         scope_label = f"📍 {chat_title}"
 
-    header = f"🏆 <b>Velocity Bingo — Leaderboard</b> 🏆\n{scope_label}  |  {time_label}\n"
+    time_label  = TIME_ICONS[time_filter]
+    coins_label = COINS_LABEL.get((scope, time_filter), "coins")
+
+    header = (
+        f"🏆 <b>Velocity Bingo — Leaderboard</b> 🏆\n"
+        f"{scope_label}  |  {time_label}\n"
+    )
 
     if not rows:
         period_map = {
-            "today": "today",
-            "week": "this week",
-            "month": "this month",
-            "year": "this year",
+            "today":    "today",
+            "week":     "this week",
+            "month":    "this month",
+            "year":     "this year",
             "all_time": "yet",
         }
         period_str = period_map.get(time_filter, "yet")
         where = "in this chat" if scope == "chat" else "globally"
-        return header + f"\n📭 No scores recorded {where} {period_str}."
+        return header + f"\n📭 No coins earned {where} {period_str}."
 
     lines = [header, "━━━━━━━━━━━━━━━━━━━━"]
     emojis = ["💎", "👑", "⭐", "✨", "🌟", "💫", "🎯", "🎖️", "🏅", "🎁"]
-    
+
     for rank, row in enumerate(rows, start=1):
-        name = _name(row)
-        coins = row.get("coins", 0)
+        name  = _name(row)
+        # all_time global uses 'coins' field; all other combos use 'coins_earned'
+        coins = row.get("coins_earned") if row.get("coins_earned") is not None else row.get("coins", 0)
         emoji = emojis[(rank - 1) % len(emojis)]
-        
+
         if rank == 1:
-            lines.append(f"🥇 <b>{name}</b> {emoji} 💰 <b>{coins:,}</b>")
+            rank_str = "🥇"
         elif rank == 2:
-            lines.append(f"🥈 <b>{name}</b> {emoji} 💰 <b>{coins:,}</b>")
+            rank_str = "🥈"
         elif rank == 3:
-            lines.append(f"🥉 <b>{name}</b> {emoji} 💰 <b>{coins:,}</b>")
+            rank_str = "🥉"
         else:
-            lines.append(f"{rank}. <b>{name}</b> {emoji} 💰 <b>{coins:,}</b>")
-    
+            rank_str = f"{rank}."
+
+        lines.append(f"{rank_str} <b>{name}</b> {emoji} — 💰 <b>{coins:,}</b>")
+
     lines.append("━━━━━━━━━━━━━━━━━━━━")
+    lines.append(f"<i>Showing: {coins_label}</i>")
     return "\n".join(lines)
+
