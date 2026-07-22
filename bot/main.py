@@ -10,6 +10,7 @@ from telegram.ext import (
     ContextTypes,
 )
 from telegram.error import BadRequest, Forbidden
+from webserver import start_webserver
 
 import database as db
 from rooms import cmd_bingo, handle_join_callback, handle_cancel_room_callback, cmd_stopbingo
