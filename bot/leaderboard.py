@@ -68,7 +68,7 @@ async def build_leaderboard_text(
 
     header = (
         "<blockquote>"
-        f"🏆 <b>Velocity Bingo — Leaderboard</b> 🏆\n"
+        f"🏆 <b>Velocity Bingo — Leaderboard</b> \n"
         f"{scope_label} | {time_label}"
         "</blockquote>"
     )
