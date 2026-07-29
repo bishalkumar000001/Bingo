@@ -2,6 +2,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from database import get_leaderboard_filtered
 from utils import medal
+from html import escape
 
 SCOPE_ICONS = {"global": "🌐 Global", "chat": "📍 Current Chat"}
 TIME_ICONS = {
@@ -41,9 +42,10 @@ def build_leaderboard_keyboard(scope: str, time_filter: str, chat_id: int) -> In
 
 
 def _name(row: dict) -> str:
-    if row.get("username"):
-        return f"@{row['username']}"
-    return row.get("first_name") or str(row.get("telegram_id", "?"))
+    user_id = row.get("telegram_id")
+    display_name = row.get("first_name") or str(user_id)
+
+    return f'<a href="tg://user?id={user_id}">{escape(display_name)}</a>''
 
 
 async def build_leaderboard_text(
@@ -60,7 +62,12 @@ async def build_leaderboard_text(
     if scope == "chat" and chat_title:
         scope_label = f"📍 {chat_title}"
 
-    header = f"🏆 <b>Velocity Bingo — Leaderboard</b> 🏆\n{scope_label}  |  {time_label}\n"
+    header = (
+        "<blockquote>"
+        f"🏆 <b>Velocity Bingo — Leaderboard</b> 🏆\n"
+        f"{scope_label} | {time_label}"
+        "</blockquote>"
+    )
 
     if not rows:
         period_map = {
@@ -74,8 +81,10 @@ async def build_leaderboard_text(
         where = "in this chat" if scope == "chat" else "globally"
         return header + f"\n📭 No scores recorded {where} {period_str}."
 
-    lines = [header, "━━━━━━━━━━━━━━━━━━━━"]
-    emojis = ["💎", "👑", "⭐", "✨", "🌟", "💫", "🎯", "🎖️", "🏅", "🎁"]
+    lines = [
+        header,
+        "<blockquote>",
+    ]
     
     for rank, row in enumerate(rows, start=1):
         name = _name(row)
@@ -83,13 +92,13 @@ async def build_leaderboard_text(
         emoji = emojis[(rank - 1) % len(emojis)]
         
         if rank == 1:
-            lines.append(f"🥇 <b>{name}</b> {emoji} 💰 <b>{coins:,}</b>")
+            lines.append(f"🥇 <b>{name}</b> <b>{coins:,}</b>")
         elif rank == 2:
-            lines.append(f"🥈 <b>{name}</b> {emoji} 💰 <b>{coins:,}</b>")
+            lines.append(f"🥈 <b>{name}</b> <b>{coins:,}</b>")
         elif rank == 3:
-            lines.append(f"🥉 <b>{name}</b> {emoji} 💰 <b>{coins:,}</b>")
+            lines.append(f"🥉 <b>{name}</b> <b>{coins:,}</b>")
         else:
-            lines.append(f"{rank}. <b>{name}</b> {emoji} 💰 <b>{coins:,}</b>")
+            lines.append(f"{rank}. <b>{name}</b> <b>{coins:,}</b>")
     
-    lines.append("━━━━━━━━━━━━━━━━━━━━")
+    lines.append("</blockquote>")
     return "\n".join(lines)
