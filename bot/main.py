@@ -98,7 +98,7 @@ async def cmd_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_title = chat.title if is_group else ""
     text = await build_leaderboard_text(scope, time_filter, chat_id, chat_title)
     keyboard = build_leaderboard_keyboard(scope, time_filter, chat_id)
-    with open("bot/assets/leaderboard_banner.png", "rb") as photo:
+    with open("bot/assets/ChatGPT Image Jul 30, 2026, 03_55_33 AM.png", "rb") as photo:
         await update.message.reply_photo(
             photo=photo,
             caption=text,
