@@ -89,7 +89,6 @@ async def build_leaderboard_text(
     for rank, row in enumerate(rows, start=1):
         name = _name(row)
         coins = row.get("coins", 0)
-        emoji = emojis[(rank - 1) % len(emojis)]
         
         if rank == 1:
             lines.append(f"🥇 <b>{name}</b> <b>{coins:,}</b>")
