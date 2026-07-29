@@ -98,7 +98,13 @@ async def cmd_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_title = chat.title if is_group else ""
     text = await build_leaderboard_text(scope, time_filter, chat_id, chat_title)
     keyboard = build_leaderboard_keyboard(scope, time_filter, chat_id)
-    await update.message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
+    with open("bot/assets/leaderboard_banner.png", "rb") as photo:
+        await update.message.reply_photo(
+            photo=photo,
+            caption=text,
+            parse_mode="HTML",
+            reply_markup=keyboard,
+        )
 
 
 async def handle_leaderboard_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -132,7 +138,7 @@ async def handle_leaderboard_callback(update: Update, context: ContextTypes.DEFA
     keyboard = build_leaderboard_keyboard(scope, time_filter, chat_id)
 
     try:
-        await query.edit_message_text(text, reply_markup=keyboard, parse_mode="HTML")
+        await query.edit_message_caption(caption=text, reply_markup=keyboard, parse_mode="HTML")
     except BadRequest:
         pass
     await query.answer()
