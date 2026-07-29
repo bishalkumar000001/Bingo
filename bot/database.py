@@ -171,11 +171,12 @@ async def update_card_message_id(card_id: str, message_id: int):
     )
 
 
-async def log_game_result(telegram_id: int, chat_id: int, won: bool):
+async def log_game_result(telegram_id: int, chat_id: int, won: bool, coins: int = 0):
     await _col("game_results").insert_one({
         "telegram_id": telegram_id,
         "chat_id": chat_id,
         "won": won,
+        "coins": coins,
         "created_at": datetime.now(timezone.utc),
     })
 
@@ -208,6 +209,8 @@ async def get_leaderboard(limit: int = 10) -> List[Dict]:
 async def get_leaderboard_filtered(
     scope: str, chat_id: int, time_filter: str, limit: int = 10
 ) -> List[Dict]:
+    # For global all-time leaderboard, use stored `users.coins` to preserve
+    # historical totals that may not be reflected in `game_results`.
     if scope == "global" and time_filter == "all_time":
         return await get_leaderboard(limit)
 
@@ -220,9 +223,10 @@ async def get_leaderboard_filtered(
     if start:
         match["created_at"] = {"$gte": start}
 
+    # Aggregate wins and sum of coins awarded during the period from game_results
     pipeline = [
         {"$match": match},
-        {"$group": {"_id": "$telegram_id", "wins": {"$sum": 1}}},
+        {"$group": {"_id": "$telegram_id", "wins": {"$sum": 1}, "coins": {"$sum": "$coins"}}},
         {"$lookup": {
             "from": "users",
             "localField": "_id",
@@ -236,7 +240,7 @@ async def get_leaderboard_filtered(
             "wins": 1,
             "username": "$user_doc.username",
             "first_name": "$user_doc.first_name",
-            "coins": "$user_doc.coins",
+            "coins": 1,
             "games_played": "$user_doc.games_played",
         }},
         {"$sort": {"coins": -1, "wins": -1}},
