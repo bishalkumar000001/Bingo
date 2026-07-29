@@ -45,7 +45,7 @@ def _name(row: dict) -> str:
     user_id = row.get("telegram_id")
     display_name = row.get("first_name") or str(user_id)
 
-    return f'<a href="tg://user?id={user_id}">{escape(display_name)}</a>''
+    return f'<a href="tg://user?id={user_id}">{escape(display_name)}</a>'
 
 
 async def build_leaderboard_text(
