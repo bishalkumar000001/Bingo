@@ -223,7 +223,7 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id=chat_id, text=cancel_text, parse_mode="HTML")
         except Exception:
             pass
-        try:
+    try:
             await context.bot.send_message(
                 chat_id=opponent_id,
                 text=(
