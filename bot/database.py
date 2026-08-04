@@ -273,6 +273,16 @@ async def update_user_stats(telegram_id: int, won: bool, coins_delta: int):
     )
 
 
+async def deduct_coins_for_forfeit(user_id: int, amount: int) -> bool:
+    """Atomically deduct *amount* coins from *user_id* only if they have enough.
+    Returns True on success, False if the balance was insufficient."""
+    result = await _col("users").update_one(
+        {"telegram_id": user_id, "coins": {"$gte": amount}},
+        {"$inc": {"coins": -amount}},
+    )
+    return result.modified_count > 0
+
+
 async def cancel_room(room_id: str):
     await _col("rooms").update_one(
         {"_id": _oid(room_id)},
