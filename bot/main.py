@@ -14,11 +14,19 @@ from webserver import start_webserver
 
 import database as db
 from rooms import cmd_bingo, handle_join_callback, handle_cancel_room_callback, cmd_stopbingo
-from game import handle_card_callback, handle_rematch_callback, _try_unpin, _log
-from economy import award_winner, record_loss
+from game import (
+    handle_card_callback,
+    handle_rematch_callback,
+    handle_cancel_game_callback,
+    handle_forfeit_ask_callback,
+    handle_forfeit_confirm_callback,
+    _try_unpin,
+    _log,
+)
+from economy import award_winner, record_loss, process_forfeit
 from leaderboard import build_leaderboard_text, build_leaderboard_keyboard
 from utils import display_name_from_db, display_name
-from models import LINES_TO_WIN, WIN_COINS, OWNER_ID, LOGGER_GROUP_ID, SUPPORT_CHANNEL
+from models import LINES_TO_WIN, WIN_COINS, FORFEIT_COST, CANCEL_FREE_THRESHOLD, OWNER_ID, LOGGER_GROUP_ID, SUPPORT_CHANNEL
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
