@@ -236,6 +236,8 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     except (Forbidden, BadRequest):
         pass
+    except Exception:
+        pass
 
     await update.message.reply_text(
         f"✅ Room <b>#{room['room_number']}</b> cancelled. No coins deducted.",
