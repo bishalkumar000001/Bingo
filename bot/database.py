@@ -326,6 +326,13 @@ async def transfer_coins(from_id: int, to_id: int, amount: int) -> bool:
     )
     return True
 
+async def add_coins(user_id: int, amount: int) -> bool:
+    """Add coins to a user without deducting from anyone."""
+    result = await _col("users").update_one(
+        {"telegram_id": user_id},
+        {"$inc": {"coins": amount}}
+    )
+    return result.modified_count > 0
 
 async def find_user_by_username(username: str) -> Optional[Dict]:
     """Find a user by username."""
