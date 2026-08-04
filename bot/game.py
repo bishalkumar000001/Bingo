@@ -17,8 +17,8 @@ from cards import (
     build_group_turn_keyboard,
     build_group_waiting_text,
 )
-from economy import award_winner, record_loss
-from models import WIN_COINS, LINES_TO_WIN, LOGGER_GROUP_ID, SUPPORT_CHANNEL
+from economy import award_winner, record_loss, process_forfeit
+from models import WIN_COINS, FORFEIT_COST, CANCEL_FREE_THRESHOLD, LINES_TO_WIN, LOGGER_GROUP_ID, SUPPORT_CHANNEL
 from utils import display_name_from_db, format_called_numbers
 
 ROOM_LOCKS = defaultdict(asyncio.Lock)
