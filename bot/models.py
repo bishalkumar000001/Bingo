@@ -1,6 +1,9 @@
 import os
 
 WIN_COINS = 500
+FORFEIT_COST = 500 # Coins deducted from a player who forfeits after the 5th number
+
+CANCEL_FREE_THRESHOLD = 5 # Cancellation is free while < this many numbers have been called
 LINES_TO_WIN = 5
 
 BINGO_LETTERS = ["B", "I", "N", "G", "O"]
