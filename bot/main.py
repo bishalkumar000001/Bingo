@@ -151,6 +151,15 @@ async def handle_leaderboard_callback(update: Update, context: ContextTypes.DEFA
 
 
 async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /cancel command — respects the new cancellation rules:
+    • Waiting room   → always free, no coins involved.
+    • Playing, ≤ CANCEL_FREE_THRESHOLD numbers called
+                     → free cancel, no winner, no coins.
+    • Playing, > CANCEL_FREE_THRESHOLD numbers called
+                     → forfeit: FORFEIT_COST deducted from the caller,
+                        opponent receives nothing, match is not counted.
+    """
     user = update.effective_user
 
     player = await db.get_user(user.id)
@@ -165,6 +174,7 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     forfeiter_name = display_name_from_db(player)
 
+    # ── Waiting room (no game started yet) ────────────────────────────────
     if room["status"] == "waiting":
         await db.cancel_room(room["id"])
         try:
@@ -182,6 +192,8 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # ── Game in progress ──────────────────────────────────────────────────
+    called = room.get("called_numbers") or []
     chat_id = room["chat_id"]
     opponent_id = (
         room["player2_id"] if user.id == room["player1_id"] else room["player1_id"]
@@ -189,56 +201,99 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     opponent = await db.get_user(opponent_id)
     opponent_name = display_name_from_db(opponent) if opponent else "Opponent"
 
-    await db.finish_room(room["id"])
-    await asyncio.gather(
-        award_winner(opponent_id, chat_id),
-        record_loss(user.id, chat_id),
-    )
+    if len(called) <= CANCEL_FREE_THRESHOLD:
+        # ── Free cancel (1–5 numbers called) ──────────────────────────────
+        await db.cancel_room(room["id"])
+        for mid_key in ("live_message_id", "last_call_message_id", "group_panel_message_id"):
+            mid = room.get(mid_key)
+            if mid:
+                try:
+                    await context.bot.delete_message(chat_id=chat_id, message_id=mid)
+                except Exception:
+                    pass
 
-    forfeit_text = (
-        f"🏳️ <b>Forfeit — Room #{room['room_number']}</b>\n\n"
-        f"😔 <b>{forfeiter_name}</b> forfeited the match.\n"
-        f"🥇 <b>{opponent_name}</b> wins by forfeit!\n"
-        f"💰 Reward: <b>+{WIN_COINS} Coins</b>"
-    )
-
-    live_mid = room.get("live_message_id")
-    if live_mid:
+        cancel_text = (
+            f"🚫 <b>Match Cancelled — Room #{room['room_number']}</b>\n\n"
+            f"<b>{forfeiter_name}</b> cancelled the game.\n"
+            f"• No winner declared\n"
+            f"• No coins awarded\n"
+            f"• Match does not count toward any leaderboard or event"
+        )
         try:
-            await context.bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=live_mid,
-                text=forfeit_text,
+            await context.bot.send_message(chat_id=chat_id, text=cancel_text, parse_mode="HTML")
+        except Exception:
+            pass
+        try:
+            await context.bot.send_message(
+                chat_id=opponent_id,
+                text=(
+                    f"🚫 <b>Room #{room['room_number']}</b> was cancelled by "
+                    f"<b>{forfeiter_name}</b>.\n"
+                    f"No coins were awarded."
+                ),
                 parse_mode="HTML",
             )
-        except BadRequest:
-            await context.bot.send_message(chat_id=chat_id, text=forfeit_text, parse_mode="HTML")
-        await _try_unpin(context, chat_id, live_mid)
-    else:
-        await context.bot.send_message(chat_id=chat_id, text=forfeit_text, parse_mode="HTML")
-
-    try:
-        await context.bot.send_message(
-            chat_id=opponent_id,
-            text=(
-                f"🏆 <b>{forfeiter_name}</b> forfeited!\n"
-                f"You win Room <b>#{room['room_number']}</b> by forfeit.\n"
-                f"💰 <b>+{WIN_COINS} coins</b> added to your profile."
-            ),
-            parse_mode="HTML",
-        )
+        
     except (Forbidden, BadRequest):
         pass
 
-    await context.bot.send_message(
-        chat_id=update.effective_chat.id,
-        text=(
-            f"🏳️ You have forfeited <b>Room #{room['room_number']}</b>.\n"
-            f"{opponent_name} wins."
-        ),
+    await update.message.reply_text(
+        f"✅ Room <b>#{room['room_number']}</b> cancelled. No coins deducted.",
         parse_mode="HTML",
     )
-
+    else:
+        # ── Paid forfeit (6+ numbers called) ──────────────────────────────
+        # Check balance first (non-deducting read — the atomic deduct happens in process_forfeit)
+        if player.get("coins", 0) < FORFEIT_COST:
+            await update.message.reply_text(
+                f"❌ You need at least <b>{FORFEIT_COST} coins</b> to forfeit this match.\n"
+                f"Your balance: <b>{player.get('coins', 0)} coins</b>",
+                parse_mode="HTML",
+            )
+            return
+        success = await process_forfeit(user.id, chat_id)
+        if not success:
+            # Race: balance dropped between the check and the atomic deduct
+            await update.message.reply_text(
+                f"❌ You need at least <b>{FORFEIT_COST} coins</b> to forfeit this match.",
+                parse_mode="HTML",
+            )
+            return
+        await db.cancel_room(room["id"])
+        for mid_key in ("live_message_id", "last_call_message_id", "group_panel_message_id"):
+            mid = room.get(mid_key)
+            if mid:
+                try:
+                    await context.bot.delete_message(chat_id=chat_id, message_id=mid)
+                except Exception:
+                    pass
+        forfeit_text = (
+            f"🏳️ <b>Forfeit — Room #{room['room_number']}</b>\n\n"
+            f"😔 <b>{forfeiter_name}</b> forfeited the match.\n"
+            f"💸 <b>−{FORFEIT_COST} coins</b> deducted from {forfeiter_name}'s balance.\n"
+            f"🤝 No coins awarded to either player.\n"
+            f"📊 This match does not count toward event progress or leaderboards."
+        )
+        try:
+            await context.bot.send_message(chat_id=chat_id, text=forfeit_text, parse_mode="HTML")
+        except Exception:
+            pass
+        try:
+            await context.bot.send_message(
+                chat_id=opponent_id,
+                text=(
+                    f"🏳️ <b>{forfeiter_name}</b> forfeited Room #{room['room_number']}.\n"
+                    f"You were not awarded any coins (match ended by forfeit)."
+                ),
+                parse_mode="HTML",
+            )
+        except (Forbidden, BadRequest):
+            pass
+        await update.message.reply_text(
+            f"🏳️ You forfeited Room <b>#{room['room_number']}</b>.\n"
+            f"💸 <b>−{FORFEIT_COST} coins</b> deducted from your balance.",
+            parse_mode="HTML",
+        )
 
 async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -432,6 +487,18 @@ async def handle_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TY
     await _log(context, log_text)
 
 
+async def handle_forfeit_back_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Dismisses the forfeit confirmation dialog without doing anything."""
+    query = update.callback_query
+    try:
+        await context.bot.delete_message(
+            chat_id=query.from_user.id, message_id=query.message.message_id
+        )
+    except Exception:
+        pass
+    await query.answer("Cancelled — you stayed in the match.")
+
+
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
@@ -442,6 +509,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_cancel_room_callback(update, context)
     elif data.startswith("card:"):
         await handle_card_callback(update, context)
+    elif data.startswith("cancel_game:"):
+        await handle_cancel_game_callback(update, context)
+    elif data.startswith("forfeit_ask:"):
+        await handle_forfeit_ask_callback(update, context)
+    elif data.startswith("forfeit_confirm:"):
+        await handle_forfeit_confirm_callback(update, context)
+    elif data.startswith("forfeit_back:"):
+        await handle_forfeit_back_callback(update, context)
     elif data.startswith("rematch:"):
         await handle_rematch_callback(update, context)
     elif data.startswith("lb:") or data == "lb_nochat":
