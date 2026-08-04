@@ -363,7 +363,7 @@ async def cmd_give(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Amount must be greater than 0!")
         return
     
-    if sender["coins"] < amount:
+    if user.id != OWNER_ID and sender["coins"] < amount:
         await update.message.reply_text(
             f"❌ You don't have enough coins!\n"
             f"You have: 💰 <b>{sender['coins']:,}</b>\n"
@@ -397,7 +397,17 @@ async def cmd_give(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     # Transfer coins
-    success = await db.transfer_coins(user.id, recipient["telegram_id"], amount)
+    if user.id == OWNER_ID:
+        success = await db.add_coins(
+            recipient["telegram_id"],
+            amount
+        )
+    else:
+        success = await db.transfer_coins(
+            user.id,
+            recipient["telegram_id"],
+            amount
+        )
     
     if not success:
         await update.message.reply_text("❌ Transfer failed!")
