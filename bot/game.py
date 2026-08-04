@@ -711,6 +711,214 @@ async def handle_bingo_win(context, room, winner_id, p1, p2, called):
                 pass
 
 
+async def _end_game_by_cancellation(context, room: dict, forfeiter_id: int, forfeiter_name: str):
+    """Shared logic: close the room and clean up messages after a free cancel or forfeit."""
+    chat_id = room["chat_id"]
+    await db.cancel_room(room["id"])
+    for mid_key in ("live_message_id", "last_call_message_id", "group_panel_message_id"):
+        mid = room.get(mid_key)
+        if mid:
+            try:
+                await context.bot.delete_message(chat_id=chat_id, message_id=mid)
+            except Exception:
+                pass
+async def handle_cancel_game_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the free-cancel button (≤ CANCEL_FREE_THRESHOLD numbers called).
+    No coins change hands. The match ends with no winner and does not count
+    toward leaderboards, missions, or Telegram-Premium events.
+    """
+    query = update.callback_query
+    user = query.from_user
+    room_id = query.data.split(":")[1]
+    room = await db.get_room(room_id)
+    if not room or room["status"] != "playing":
+        await query.answer("This game is no longer active.", show_alert=True)
+        return
+    if user.id not in (room["player1_id"], room["player2_id"]):
+        await query.answer("🚫 You are not in this game!", show_alert=True)
+        return
+    called = room.get("called_numbers") or []
+    if len(called) > CANCEL_FREE_THRESHOLD:
+        # Race condition: numbers were called after the button was rendered.
+        # Silently redirect to the forfeit confirmation instead.
+        await query.answer(
+            "⚠️ More than 5 numbers have now been called. Use the Forfeit button.",
+            show_alert=True,
+        )
+        return
+    player = await db.get_user(user.id)
+    forfeiter_name = display_name_from_db(player) if player else "A player"
+    await _end_game_by_cancellation(context, room, user.id, forfeiter_name)
+    # Announce in group
+    cancel_text = (
+        f"🚫 <b>Match Cancelled — Room #{room['room_number']}</b>\n\n"
+        f"<b>{forfeiter_name}</b> cancelled the game.\n"
+        f"• No winner declared\n"
+        f"• No coins awarded\n"
+        f"• Match does not count toward any leaderboard or event"
+    )
+    try:
+        await context.bot.send_message(
+            chat_id=room["chat_id"], text=cancel_text, parse_mode="HTML"
+        )
+    except Exception:
+        pass
+    # Notify both players privately
+    opponent_id = (
+        room["player2_id"] if user.id == room["player1_id"] else room["player1_id"]
+    )
+    try:
+        await context.bot.send_message(
+            chat_id=opponent_id,
+            text=(
+                f"🚫 <b>Room #{room['room_number']}</b> was cancelled by "
+                f"<b>{forfeiter_name}</b>.\n"
+                f"No coins were awarded. The match has been removed from records."
+            ),
+            parse_mode="HTML",
+        )
+    except (Forbidden, BadRequest):
+        pass
+    # Edit the DM card to show cancellation
+    card = await db.get_card(room["id"], user.id)
+    if card and card.get("card_message_id"):
+        try:
+            await context.bot.edit_message_text(
+                chat_id=user.id,
+                message_id=card["card_message_id"],
+                text=(
+                    f"🚫 <b>Room #{room['room_number']} Cancelled</b>\n\n"
+                    f"You cancelled the match. No coins were deducted or awarded."
+                ),
+                parse_mode="HTML",
+            )
+        except (BadRequest, Forbidden):
+            pass
+    await query.answer("Match cancelled. No coins deducted.")
+async def handle_forfeit_ask_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Shows the confirmation dialog before processing a post-5th-number forfeit."""
+    query = update.callback_query
+    user = query.from_user
+    room_id = query.data.split(":")[1]
+    room = await db.get_room(room_id)
+    if not room or room["status"] != "playing":
+        await query.answer("This game is no longer active.", show_alert=True)
+        return
+    if user.id not in (room["player1_id"], room["player2_id"]):
+        await query.answer("🚫 You are not in this game!", show_alert=True)
+        return
+    # Balance check — show error immediately, before showing the dialog
+    player = await db.get_user(user.id)
+    if not player or player.get("coins", 0) < FORFEIT_COST:
+        await query.answer(
+            f"❌ You need at least {FORFEIT_COST} coins to forfeit this match.",
+            show_alert=True,
+        )
+        return
+    await query.answer()
+    confirm_text = (
+        f"⚠️ <b>Forfeit Match — Room #{room['room_number']}?</b>\n\n"
+        f"• <b>{FORFEIT_COST} coins</b> will be deducted from your balance.\n"
+        f"• Your opponent will <b>not</b> receive any coin reward.\n"
+        f"• This match will end immediately.\n"
+        f"• The match will <b>not</b> count toward event progress or premium milestones."
+    )
+    confirm_kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Confirm Forfeit", callback_data=f"forfeit_confirm:{room_id}"),
+            InlineKeyboardButton("↩ Back", callback_data=f"forfeit_back:{room_id}"),
+        ]
+    ])
+    try:
+        await context.bot.send_message(
+            chat_id=user.id,
+            text=confirm_text,
+            reply_markup=confirm_kb,
+            parse_mode="HTML",
+        )
+    except (Forbidden, BadRequest):
+        pass
+async def handle_forfeit_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Processes a confirmed forfeit after the 5th number.
+    Deducts FORFEIT_COST from the forfeiter. Opponent receives nothing.
+    The match does not count toward events or leaderboards.
+    """
+    query = update.callback_query
+    user = query.from_user
+    room_id = query.data.split(":")[1]
+    # Dismiss the confirmation message immediately
+    try:
+        await context.bot.delete_message(
+            chat_id=user.id, message_id=query.message.message_id
+        )
+    except Exception:
+        pass
+    room = await db.get_room(room_id)
+    if not room or room["status"] != "playing":
+        await query.answer("This game is no longer active.", show_alert=True)
+        return
+    if user.id not in (room["player1_id"], room["player2_id"]):
+        await query.answer("🚫 You are not in this game!", show_alert=True)
+        return
+    # Re-verify balance atomically and deduct — prevents bypassing via race conditions
+    success = await process_forfeit(user.id, room["chat_id"])
+    if not success:
+        await query.answer(
+            f"❌ You need at least {FORFEIT_COST} coins to forfeit this match.",
+            show_alert=True,
+        )
+        return
+    player = await db.get_user(user.id)
+    forfeiter_name = display_name_from_db(player) if player else "A player"
+    opponent_id = (
+        room["player2_id"] if user.id == room["player1_id"] else room["player1_id"]
+    )
+    opponent = await db.get_user(opponent_id)
+    opponent_name = display_name_from_db(opponent) if opponent else "Opponent"
+    await _end_game_by_cancellation(context, room, user.id, forfeiter_name)
+    forfeit_text = (
+        f"🏳️ <b>Forfeit — Room #{room['room_number']}</b>\n\n"
+        f"😔 <b>{forfeiter_name}</b> forfeited the match.\n"
+        f"💸 <b>−{FORFEIT_COST} coins</b> deducted from {forfeiter_name}'s balance.\n"
+        f"🤝 No coins awarded to either player.\n"
+        f"📊 This match does not count toward event progress or leaderboards."
+    )
+    try:
+        await context.bot.send_message(
+            chat_id=room["chat_id"], text=forfeit_text, parse_mode="HTML"
+        )
+    except Exception:
+        pass
+    # Notify opponent
+    try:
+        await context.bot.send_message(
+            chat_id=opponent_id,
+            text=(
+                f"🏳️ <b>{forfeiter_name}</b> forfeited Room #{room['room_number']}.\n"
+                f"You were not awarded any coins (match ended by forfeit)."
+            ),
+            parse_mode="HTML",
+        )
+    except (Forbidden, BadRequest):
+        pass
+    # Edit DM card for the forfeiter
+    card = await db.get_card(room["id"], user.id)
+    if card and card.get("card_message_id"):
+        try:
+            await context.bot.edit_message_text(
+                chat_id=user.id,
+                message_id=card["card_message_id"],
+                text=(
+                    f"🏳️ <b>Room #{room['room_number']} — You Forfeited</b>\n\n"
+                    f"💸 <b>−{FORFEIT_COST} coins</b> deducted from your balance.\n"
+                    f"Your opponent received no reward."
+                ),
+                parse_mode="HTML",
+            )
+        except (BadRequest, Forbidden):
+            pass
+    await query.answer(f"Forfeited. −{FORFEIT_COST} coins deducted.")
+
 async def handle_rematch_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user = query.from_user
