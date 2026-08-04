@@ -223,26 +223,7 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id=chat_id, text=cancel_text, parse_mode="HTML")
         except Exception:
             pass
-    try:
-            await context.bot.send_message(
-                chat_id=opponent_id,
-                text=(
-                    f"🚫 <b>Room #{room['room_number']}</b> was cancelled by "
-                    f"<b>{forfeiter_name}</b>.\n"
-                    f"No coins were awarded."
-                ),
-                parse_mode="HTML",
-            )
-        
-    except (Forbidden, BadRequest):
-        pass
-    except Exception:
-        pass
-
-    await update.message.reply_text(
-        f"✅ Room <b>#{room['room_number']}</b> cancelled. No coins deducted.",
-        parse_mode="HTML",
-    )
+     
     else:
         # ── Paid forfeit (6+ numbers called) ──────────────────────────────
         # Check balance first (non-deducting read — the atomic deduct happens in process_forfeit)
