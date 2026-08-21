@@ -1,0 +1,184 @@
+BINGO BOT — PROPRIETARY SOFTWARE LICENSE
+========================================
+
+Copyright (c) 2026 Bishal Kumar
+All Rights Reserved.
+
+Project: Velocity Bingo Bot
+License Type: Proprietary / All Rights Reserved
+Copyright Holder / Rights Holder: Bishal Kumar
+Copyright Year: 2026
+
+IMPORTANT
+---------
+This license governs the original material created for and included in this
+project. It does not replace, override, or transfer the licenses of any
+third-party software, libraries, frameworks, fonts, images, APIs, services,
+or other materials that are separately owned by their respective authors or
+providers.
+
+1. COPYRIGHT AND OWNERSHIP
+--------------------------
+The original source code, original program logic, original bot behavior,
+original configuration created for the project, original documentation,
+original text, original design elements, and other original creative or
+technical material authored for this project are claimed as copyrighted works
+of the copyright holder identified above, except where a component is clearly
+identified as third-party material.
+
+Copyright in the original project material is reserved by Bishal Kumar.
+No provision of this license transfers ownership of the copyright to another
+person or organization.
+
+2. LICENSE GRANT
+----------------
+Unless the copyright holder gives separate written permission, no license is
+granted to copy, modify, distribute, publish, sell, sublicense, lease,
+rent, publicly release, or create derivative works from the protected original
+project material beyond rights that cannot legally be restricted.
+
+Any permission granted by the copyright holder may be limited to a particular
+person, organization, copy, version, purpose, period, or deployment.
+
+3. PROHIBITED USES
+------------------
+Without prior written permission from the copyright holder, the following are
+prohibited to the extent permitted by applicable law:
+
+- Re-uploading or redistributing the complete project or a substantial part
+  of the original source code.
+- Selling, licensing, sublicensing, or commercially redistributing the
+  original project or substantial portions of its original code.
+- Publishing the source code publicly, including on repositories, file
+  sharing services, websites, forums, or channels.
+- Removing, hiding, or altering copyright, license, or ownership notices.
+- Claiming to be the original author or copyright holder of the protected
+  original material.
+- Presenting the protected original material as independently created by
+  another person or organization.
+- Creating and distributing a substantially similar competing product by
+  copying protected original project material.
+- Using a copy of the project to grant unauthorized access to the original
+  source code or other protected project material.
+
+Nothing in this section prohibits activities that are expressly permitted by
+applicable law or by the license of a third-party component.
+
+4. MODIFICATION AND DERIVATIVE WORKS
+------------------------------------
+Modification of the protected original project material requires prior
+written permission from the copyright holder, unless a legal exception
+applies.
+
+A modified copy does not transfer ownership of the original material. Where
+lawfully permitted modifications contain protected original material, the
+original copyright notice must remain intact.
+
+5. REDISTRIBUTION
+-----------------
+A recipient may not redistribute this project or a substantial portion of its
+original protected material unless the copyright holder has provided written
+permission.
+
+If written redistribution permission is granted, the recipient must preserve
+this LICENSE.txt file and the COPYRIGHT.md notice unless the written
+permission expressly states otherwise.
+
+6. THIRD-PARTY COMPONENTS
+-------------------------
+This project may include or depend on software and materials created by third
+parties. Such components are NOT claimed as original works of the copyright
+holder merely because they are included in or used by this project.
+
+Third-party components remain subject to their respective copyright notices,
+licenses, terms of service, and other applicable conditions. Users are
+responsible for complying with those terms.
+
+Where a third-party license grants rights that are broader than this
+proprietary license, those rights continue to apply to the relevant
+third-party component as required by its license.
+
+7. TRADEMARKS AND NAMES
+-----------------------
+Names, logos, trademarks, service marks, usernames, bot names, and other
+branding associated with the project may be protected separately from
+copyright. This license does not grant permission to use any trademark or
+branding belonging to the copyright holder or to a third party.
+
+8. NO TRANSFER OF OWNERSHIP
+---------------------------
+Giving, sending, selling, hosting, or otherwise providing a copy of the
+project does not transfer copyright ownership or any other intellectual
+property rights.
+
+Any transfer of ownership must be made through a separate written agreement
+signed or otherwise validly accepted by the relevant parties.
+
+9. NO WARRANTY
+--------------
+THE PROJECT IS PROVIDED "AS IS" TO THE MAXIMUM EXTENT PERMITTED BY LAW.
+THE COPYRIGHT HOLDER DISCLAIMS WARRANTIES AND CONDITIONS, WHETHER EXPRESS,
+IMPLIED, OR STATUTORY, INCLUDING WARRANTIES OF MERCHANTABILITY, FITNESS FOR
+A PARTICULAR PURPOSE, TITLE, AND NON-INFRINGEMENT, EXCEPT WHERE SUCH
+DISCLAIMER IS NOT PERMITTED BY APPLICABLE LAW.
+
+10. LIMITATION OF LIABILITY
+---------------------------
+TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, THE COPYRIGHT HOLDER
+SHALL NOT BE LIABLE FOR INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, OR
+OTHER DAMAGES ARISING FROM THE USE OR INABILITY TO USE THE PROJECT.
+
+11. TERMINATION OF PERMISSION
+-----------------------------
+Any permission granted separately by the copyright holder may be terminated
+if its conditions are materially violated, subject to applicable law and the
+terms of the written permission.
+
+Upon termination of a granted permission, the recipient must stop the uses
+that were authorized solely by that permission, except where continued use is
+required or permitted by applicable law.
+
+12. GOVERNING LAW
+-----------------
+This license is intended to operate subject to the applicable copyright and
+intellectual-property laws governing the relevant parties and jurisdiction.
+Nothing in this document is intended to remove rights that cannot legally be
+waived or restricted.
+
+13. WRITTEN PERMISSION
+----------------------
+For permissions not granted by this license, obtain written authorization
+from the copyright holder before using the protected original project
+material.
+
+Copyright Holder:
+Bishal Kumar
+
+Project:
+Velocity Bingo Bot
+
+Copyright Year:
+2026
+
+14. PROVENANCE / EVIDENCE NOTICE
+---------------------------------
+This file is a copyright and licensing notice. The existence of this file by
+itself does not establish the historical date on which the underlying work
+was created, nor does it by itself conclusively establish authorship in a
+legal proceeding.
+
+For stronger provenance, retain independent dated evidence such as:
+
+- Git commits and repository history;
+- dated source archives and backups;
+- development notes and records;
+- deployment and hosting records;
+- dated screenshots or recordings of development;
+- invoices, contracts, or project communications where applicable;
+- release archives and cryptographic hashes;
+- records showing when versions were delivered or published.
+
+END OF LICENSE
+==============
+
+Copyright (c) 2026 Bishal Kumar. All Rights Reserved.
