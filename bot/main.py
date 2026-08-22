@@ -12,7 +12,6 @@ from telegram.ext import (
     filters,
 )
 from telegram.error import BadRequest, Forbidden
-from webserver import start_webserver
 
 import database as db
 from rooms import cmd_bingo, handle_join_callback, handle_cancel_room_callback, cmd_stopbingo
@@ -698,5 +697,4 @@ def main():
 
 
 if __name__ == "__main__":
-    start_webserver()
     main()
