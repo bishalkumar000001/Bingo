@@ -343,6 +343,13 @@ async def tournament_join_callback(update: Update, context: ContextTypes.DEFAULT
     if t.get("status") != "registration":
         await q.answer("Registration is closed.", show_alert=True); return
     deadline = t.get("registration_deadline")
+    if isinstance(deadline, str):
+        try:
+            deadline = datetime.fromisoformat(deadline.replace("Z", "+00:00"))
+        except ValueError:
+            deadline = None
+    if deadline and deadline.tzinfo is None:
+        deadline = deadline.replace(tzinfo=timezone.utc)
     if deadline and now >= deadline:
         await q.answer("Registration deadline has passed.", show_alert=True); return
     if await db.tournament_player_exists(tid, q.from_user.id):
