@@ -678,10 +678,22 @@ async def _maybe_advance_round(context, tid, round_no):
 async def _launch_round(context,tid,round_no):
     matches=await db.get_tournament_matches(tid,round_no)
     pending=[m for m in matches if m['status']=='pending']
-    tasks=[]
-    for m in pending:
-        tasks.append(_start_match(context,tid,round_no,m))
-    if tasks: await asyncio.gather(*tasks)
+
+    # Start tournament rooms one at a time with a 10-second gap.  Creating
+    # many Telegram game rooms simultaneously can overload the bot/group and
+    # cause missed callbacks/messages, so never launch a whole round at once.
+    for index, m in enumerate(pending):
+        try:
+            await _start_match(context,tid,round_no,m)
+        except Exception as exc:
+            logging.exception('Failed to start tournament match %s: %s', m.get('id'), exc)
+            try:
+                await db.update_tournament_match(m.get('id'), status='pending', launch_error=str(exc)[:500])
+            except Exception:
+                pass
+        if index < len(pending) - 1:
+            await asyncio.sleep(10)
+
     byes=[m for m in matches if m['status']=='bye']
     for b in byes:
         await db.update_tournament_match(b['id'], status='bye_rewarded')
@@ -723,7 +735,7 @@ async def start_tournament(context,tid):
             f"👥 Registered: <b>{len(players)}</b>\n"
             f"📊 Bracket: <b>{_esc(progression)}</b>\n"
             f"🎲 Players were shuffled randomly.{bye_text}\n"
-            f"⚔️ Round 1 matches will start together.", parse_mode='HTML')
+            f"⚔️ Round 1 rooms will start one by one with a 10-second gap.", parse_mode='HTML')
     await _launch_round(context,tid,round_no)
     return True,'▶️ Tournament started.'
 
