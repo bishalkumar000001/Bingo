@@ -22,6 +22,39 @@ from models import WIN_COINS, FORFEIT_COST, CANCEL_FREE_THRESHOLD, LINES_TO_WIN,
 from utils import display_name_from_db, format_called_numbers
 
 ROOM_LOCKS = defaultdict(asyncio.Lock)
+# Per-process hot caches. Heroku runs one Telegram polling worker; MongoDB remains
+# the source of truth, while these caches remove repeated reads from the click path.
+USER_CACHE = {}
+CARD_CACHE = {}
+CACHE_TTL = 30.0
+
+def _cached_user(player_id: int, loader):
+    import time
+    item = USER_CACHE.get(player_id)
+    if item and time.monotonic() - item[0] < CACHE_TTL:
+        return item[1]
+    return None
+
+async def _get_user_fast(player_id: int):
+    import time
+    item = USER_CACHE.get(player_id)
+    if item and time.monotonic() - item[0] < CACHE_TTL:
+        return item[1]
+    user = await db.get_user(player_id)
+    if user:
+        USER_CACHE[player_id] = (time.monotonic(), user)
+    return user
+
+async def _get_card_fast(room_id: str, player_id: int):
+    import time
+    key = (room_id, player_id)
+    item = CARD_CACHE.get(key)
+    if item and time.monotonic() - item[0] < CACHE_TTL:
+        return item[1]
+    card = await db.get_card(room_id, player_id)
+    if card:
+        CARD_CACHE[key] = (time.monotonic(), card)
+    return card
 
 
 def _msg_link(chat_id: int, message_id: int) -> str:
@@ -105,10 +138,10 @@ async def _try_edit(context, chat_id, message_id, text, keyboard=None):
             if "Message is not modified" in str(e):
                 return True
 
-            await asynsio.sleep(0.5)
+            await asyncio.sleep(0.15)
 
         except Exception:
-            await asynsio.sleep(0.5)
+            await asyncio.sleep(0.15)
             
     return False
 
@@ -122,7 +155,7 @@ async def send_dm_card(
     is_my_turn_to_call: bool,
     need_to_mark: bool,
 ) -> bool:
-    card = await db.get_card(room["id"], player_id)
+    card = await _get_card_fast(room["id"], player_id)
     if not card:
         return False
 
@@ -182,52 +215,73 @@ async def update_group_turn_panel(
     active_player_name: str,
     waiting_player_name: str,
 ):
+    """Fast group status update using send-new/delete-old.
+
+    The new message is sent first so players see the latest state without
+    waiting for Telegram to delete the previous message. Old-message deletion
+    is deliberately fire-and-forget.
+    """
     bot_username = context.bot.username
     phase = room.get("phase", "call")
     last_called = room.get("last_called_number")
     chat_id = room["chat_id"]
+    called = room.get("called_numbers") or []
+    called_text = " • ".join(str(n) for n in called[-12:]) or "None"
 
-    active_text = build_group_turn_text(
-        room["room_number"], active_player_name, waiting_player_name, phase, last_called
+    if phase == "call":
+        status = f"🎯 <b>{active_player_name}</b> — your turn to call."
+    else:
+        status = f"⚡ <b>{active_player_name}</b> — mark <b>{last_called}</b>."
+
+    # Use the player names already supplied by the click handler. This avoids
+    # two extra MongoDB reads on every number click.
+    p1_id = room["player1_id"]
+    p2_id = room["player2_id"]
+    if active_player_id == p1_id:
+        p1_name, p2_name = active_player_name, waiting_player_name
+    else:
+        p1_name, p2_name = waiting_player_name, active_player_name
+
+    text = (
+        f"🎮 <b>Velocity Bingo — Room #{room['room_number']}</b>\n\n"
+        f"👤 {p1_name}\n"
+        f"👤 {p2_name}\n\n"
+        f"📢 Last: <b>{last_called if last_called else 'None'}</b>\n"
+        f"📋 Called: <b>{called_text}</b>\n\n"
+        f"{status}"
     )
-    active_kb = build_group_turn_keyboard(bot_username, SUPPORT_CHANNEL)
-
-    panel_message_id = room.get("group_panel_message_id")
-    if panel_message_id:
-        if await _try_edit(context, chat_id, panel_message_id, active_text, active_kb):
-            return
+    keyboard = build_group_turn_keyboard(bot_username, SUPPORT_CHANNEL)
+    old_message_id = room.get("group_panel_message_id")
 
     try:
+        # Send first: this is the latency-critical operation.
         msg = await context.bot.send_message(
             chat_id=chat_id,
-            text=active_text,
-            reply_markup=active_kb,
+            text=text,
+            reply_markup=keyboard,
             parse_mode="HTML",
         )
-    except (Forbidden, BadRequest):
-        return
+        # Persist the new message before scheduling deletion of the old one.
+        await db.update_room(room["id"], group_panel_message_id=msg.message_id)
 
-    await db.update_room(room["id"], group_panel_message_id=msg.message_id)
+        if old_message_id and old_message_id != msg.message_id:
+            async def _delete_old():
+                try:
+                    await context.bot.delete_message(chat_id=chat_id, message_id=old_message_id)
+                except Exception:
+                    pass
+            asyncio.create_task(_delete_old())
+    except (Forbidden, BadRequest):
+        pass
+    except Exception:
+        # Never let a group-status failure block the Bingo click handler.
+        return
 
 
 async def update_live_message(context, room, p1, p2):
-    text = build_live_message(room, p1, p2)
-    if not room.get("live_message_id"):
-        if await _try_edit(
-            context,
-            room["chat_id"],
-            room["live_message_id"],
-            text,
-        ):
-            return
-    try:
-        msg = await context.bot.edit_message_text(
-            chat_id=room["chat_id"],
-            text=text,
-            parse_mode="HTML",
-        )
-    except BadRequest:
-        pass
+    # Kept for compatibility with older callers. The persistent group panel is
+    # now the single live group message, so no extra Telegram edit is needed.
+    return
 
 
 ALL_LINES = [
@@ -390,175 +444,131 @@ def _render_bingo_card_image(
 
 
 async def handle_card_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Fast, race-safe Bingo button handler.
+
+    The database transition is atomic, then Telegram updates are sent in parallel.
+    This keeps number clicks responsive even when many rooms are active.
+    """
     query = update.callback_query
-    try:
-        await query.answer()
-    except Exception:
-        pass
-        
     parts = query.data.split(":")
     if len(parts) != 3:
         await query.answer()
         return
 
     room_id = parts[1]
-    number = int(parts[2])
+    try:
+        number = int(parts[2])
+    except ValueError:
+        await query.answer("Invalid number.", show_alert=True)
+        return
     player_id = query.from_user.id
 
     if query.message.chat.type != "private":
-        await query.answer("🚫 Interact with your card in the private DM!", show_alert=True)
+        await query.answer("🚫 Use your private Bingo card.", show_alert=True)
         return
 
     room = await db.get_room(room_id)
-    if not room or room["status"] != "playing":
+    if not room or room.get("status") != "playing":
         await query.answer("This game is no longer active.", show_alert=True)
         return
-
     if player_id not in (room["player1_id"], room["player2_id"]):
-        await query.answer("🚫 You are not in this game!", show_alert=True)
+        await query.answer("🚫 You are not in this game.", show_alert=True)
         return
 
     async with ROOM_LOCKS[room_id]:
         room = await db.get_room(room_id)
-    
-        called = room.get("called_numbers") or []
-        phase = room.get("phase", "call")
-        caller_id = room["current_turn"]
-        last_called = room.get("last_called_number")
-    
-        p1 = await db.get_user(room["player1_id"])
-        p2 = await db.get_user(room["player2_id"])
+        if not room or room.get("status") != "playing":
+            await query.answer("This game is no longer active.", show_alert=True)
+            return
+
+        p1, p2 = await asyncio.gather(
+            _get_user_fast(room["player1_id"]), _get_user_fast(room["player2_id"])
+        )
         p1_name = display_name_from_db(p1)
         p2_name = display_name_from_db(p2)
+        phase = room.get("phase", "call")
 
-    if phase == "call":
-        if player_id != caller_id:
-            other = p1 if room["player2_id"] == player_id else p2
-            await query.answer(
-                f"⏳ Not your turn! Wait for {display_name_from_db(other)}.",
-                show_alert=True,
+        if phase == "call":
+            if player_id != room.get("current_turn"):
+                other = p2 if player_id == room["player1_id"] else p1
+                await query.answer(f"⏳ Not your turn! Wait for {display_name_from_db(other)}.", show_alert=True)
+                return
+
+            new_room = await db.claim_call(room_id, player_id, number)
+            if not new_room:
+                await query.answer("🚫 That number was already called or the turn changed.", show_alert=True)
+                return
+            room = new_room
+            caller_name = p1_name if player_id == room["player1_id"] else p2_name
+            marker_id = room["player2_id"] if player_id == room["player1_id"] else room["player1_id"]
+            marker_name = p2_name if player_id == room["player1_id"] else p1_name
+
+            # DM cards + the single group status panel are updated concurrently.
+            # Acknowledge the Telegram click immediately after the atomic state change.
+            # The slower visual updates continue concurrently after the popup is shown.
+            await query.answer(f"📢 You called {number}!")
+            await asyncio.gather(
+                send_dm_card(context, room, player_id, caller_name, marker_name, False, False),
+                send_dm_card(context, room, marker_id, marker_name, caller_name, False, True),
+                update_group_turn_panel(context, room, marker_id, marker_name, caller_name),
             )
             return
 
-        if number in called:
-            await query.answer("🚫 That number was already called!", show_alert=True)
-            return
+        if phase == "mark":
+            marker_id = room.get("marker_id") or (
+                room["player2_id"] if room["current_turn"] == room["player1_id"] else room["player1_id"]
+            )
+            last_called = room.get("last_called_number")
+            if player_id != marker_id:
+                await query.answer(f"⏳ Wait — the other player needs to mark {last_called}!", show_alert=True)
+                return
+            if number != last_called:
+                await query.answer(f"🚫 You must mark the called number: {last_called}", show_alert=True)
+                return
 
-        await query.answer(f"📢 You called {number}!")
+            card = await _get_card_fast(room_id, player_id)
+            if not card:
+                await query.answer("Card not found. Please contact the owner.", show_alert=True)
+                return
+            if number in card.get("marked_numbers", []):
+                await query.answer("Already marked.", show_alert=True)
+                return
 
-        called = called + [number]
-        await db.update_room(room_id,
-                             called_numbers=called,
-                             last_called_number=number,
-                             phase="mark")
+            new_marked = card.get("marked_numbers", []) + [number]
+            new_lines = count_completed_lines(card["numbers"], new_marked)
+            if not await db.claim_mark(card["id"], number, new_lines):
+                await query.answer("Already marked.", show_alert=True)
+                return
+            # Keep the hot card cache in sync with the atomic MongoDB write.
+            import time
+            card["marked_numbers"] = list(dict.fromkeys(new_marked))
+            card["completed_lines"] = new_lines
+            CARD_CACHE[(room_id, player_id)] = (time.monotonic(), card)
 
-        card = await db.get_card(room_id, player_id)
-        new_lines = count_completed_lines(card["numbers"], card["marked_numbers"] + [number])
-        await db.mark_number(card["id"], number, new_lines)
+            if new_lines >= LINES_TO_WIN:
+                room = await db.get_room(room_id)
+                await handle_bingo_win(context, room, player_id, p1, p2, room.get("called_numbers", []))
+                await query.answer("🏆 BINGO!")
+                return
 
-        if new_lines >= LINES_TO_WIN:
-            await handle_bingo_win(context, room, player_id, p1, p2, called)
-            return
+            room = await db.transition_mark_to_call(room_id, player_id)
+            if not room:
+                await query.answer("The match state changed. Please try again.", show_alert=True)
+                return
 
-        caller_name = display_name_from_db(p1 if room["player1_id"] == player_id else p2)
+            other_id = room["player2_id"] if player_id == room["player1_id"] else room["player1_id"]
+            marker_name = p1_name if player_id == room["player1_id"] else p2_name
+            caller_name = p2_name if player_id == room["player1_id"] else p1_name
 
-        old_call = room.get("last_call_message_id")
-
-        if old_call:
-            try:
-                await context.bot.delete_message(
-                    chat_id=room["chat_id"],
-                    message_id=old_call,
-                )
-            except Exception:
-                pass
-
-        msg = await context.bot.send_message(
-            chat_id=room["chat_id"],
-            text=f"🎲 <b>Room #{room['room_number']}</b> — {caller_name} called <b>{number}</b>!",
-            reply_markup=_open_card_kb(context.bot.username),
-            parse_mode="HTML",
-        )
-
-        await db.update_room(
-            room_id,
-            last_call_message_id=msg.message_id,
-        )
-
-        room = await db.get_room(room_id)
-        marker_id = room["player2_id"] if player_id == room["player1_id"] else room["player1_id"]
-        marker_name = p2_name if player_id == room["player1_id"] else p1_name
-
-        await asyncio.gather(
-            send_dm_card(context, room, player_id, caller_name, marker_name, False, False),
-            send_dm_card(context, room, marker_id, marker_name, caller_name, False, True),
-        )
-
-        room = await db.get_room(room_id)
-
-        await update_live_message(context, room, p1, p2)
-
-        await update_group_turn_panel(
-            context,
-            room,
-            marker_id,
-            marker_name,
-            caller_name,
-        )
-
-    elif phase == "mark":
-        marker_id = (
-            room["player2_id"] if caller_id == room["player1_id"] else room["player1_id"]
-        )
-
-        if player_id != marker_id:
-            await query.answer(
-                f"⏳ Wait — the other player needs to mark {last_called}!",
-                show_alert=True,
+            await query.answer(f"✅ Marked {number}!")
+            await asyncio.gather(
+                send_dm_card(context, room, player_id, marker_name, caller_name, True, False),
+                send_dm_card(context, room, other_id, caller_name, marker_name, False, False),
+                update_group_turn_panel(context, room, other_id, caller_name, marker_name),
             )
             return
 
-        if number != last_called:
-            await query.answer(
-                f"🚫 You must mark the called number: {last_called}",
-                show_alert=True,
-            )
-            return
-
-        await query.answer(f"✅ Marked {number}!")
-
-        card = await db.get_card(room_id, player_id)
-        new_lines = count_completed_lines(card["numbers"], card["marked_numbers"] + [number])
-        await db.mark_number(card["id"], number, new_lines)
-
-        if new_lines >= LINES_TO_WIN:
-            room = await db.get_room(room_id)
-            await handle_bingo_win(context, room, player_id, p1, p2, called)
-            return
-
-        await db.update_room(room_id, current_turn=player_id, phase="call")
-        room = await db.get_room(room_id)
-
-        marker_name = p1_name if player_id == room["player1_id"] else p2_name
-        caller_name = p2_name if player_id == room["player1_id"] else p1_name
-        other_id = room["player2_id"] if player_id == room["player1_id"] else room["player1_id"]
-
-        await asyncio.gather(
-            send_dm_card(context, room, player_id, caller_name, marker_name, False, False),
-            send_dm_card(context, room, marker_id, marker_name, caller_name, False, True),
-        )
-
-        room = await db.get_room(room_id)
-
-        await update_live_message(context, room, p1, p2)
-
-        await update_group_turn_panel(
-            context,
-            room,
-            marker_id,
-            marker_name,
-            caller_name,
-        )
+    await query.answer()
 
 
 async def handle_bingo_win(context, room, winner_id, p1, p2, called):

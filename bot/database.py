@@ -15,7 +15,17 @@ _client: Optional[motor.motor_asyncio.AsyncIOMotorClient] = None
 def _get_db():
     global _client
     if _client is None:
-        _client = motor.motor_asyncio.AsyncIOMotorClient(MONGODB_URI)
+        _client = motor.motor_asyncio.AsyncIOMotorClient(
+            MONGODB_URI,
+            maxPoolSize=int(os.environ.get("MONGO_MAX_POOL_SIZE", "100")),
+            minPoolSize=int(os.environ.get("MONGO_MIN_POOL_SIZE", "10")),
+            serverSelectionTimeoutMS=5000,
+            connectTimeoutMS=5000,
+            socketTimeoutMS=5000,
+            waitQueueTimeoutMS=3000,
+            maxIdleTimeMS=120000,
+            retryWrites=True,
+        )
     return _client[DB_NAME]
 
 
@@ -41,6 +51,11 @@ async def init_db():
     await db["rooms"].create_index([("chat_id", 1), ("status", 1)])
     await db["rooms"].create_index([("player1_id", 1), ("status", 1)])
     await db["rooms"].create_index([("player2_id", 1), ("status", 1)])
+    await db["rooms"].create_index([("chat_id", 1), ("room_number", 1), ("status", 1)])
+    await db["rooms"].create_index([("status", 1), ("current_turn", 1)])
+    await db["rooms"].create_index([("status", 1), ("player1_id", 1)])
+    await db["rooms"].create_index([("status", 1), ("player2_id", 1)])
+    await db["tournament_matches"].create_index([("tournament_id", 1), ("round", 1), ("status", 1)])
     await db["cards"].create_index([("room_id", 1), ("player_id", 1)])
     await db["game_results"].create_index([("telegram_id", 1), ("created_at", -1)])
     await db["game_results"].create_index([("chat_id", 1), ("created_at", -1)])
@@ -48,6 +63,7 @@ async def init_db():
     await db["known_groups"].create_index("chat_id", unique=True)
     await db["tournaments"].create_index([("status", 1), ("created_at", -1)])
     await db["tournament_matches"].create_index([("tournament_id", 1), ("round", 1)])
+    await db["tournament_matches"].create_index([("tournament_id", 1), ("round", 1), ("status", 1), ("match_number", 1)])
     await db["tournament_cards"].create_index([("match_id", 1), ("player_id", 1)], unique=True)
 
 
@@ -105,7 +121,8 @@ async def get_active_rooms_in_chat(chat_id: int) -> List[Dict]:
 async def get_next_room_number(chat_id: int) -> int:
     active = await get_active_rooms_in_chat(chat_id)
     used = {r["room_number"] for r in active}
-    for n in range(1, 4):
+    max_rooms = max(1, int(os.environ.get("MAX_ROOMS_PER_CHAT", "10")))
+    for n in range(1, max_rooms + 1):
         if n not in used:
             return n
     return -1
@@ -152,6 +169,31 @@ async def update_room(room_id: str, **kwargs):
     await _col("rooms").update_one({"_id": _oid(room_id)}, {"$set": kwargs})
 
 
+async def claim_call(room_id: str, player_id: int, number: int) -> Optional[Dict]:
+    doc = await _col("rooms").find_one_and_update(
+        {"_id": _oid(room_id), "status": "playing", "phase": "call",
+         "current_turn": player_id, "called_numbers": {"$ne": number}},
+        {"$push": {"called_numbers": number},
+         "$set": {"last_called_number": number, "phase": "mark"}},
+        return_document=ReturnDocument.AFTER,
+    )
+    return _to_dict(doc)
+
+async def claim_mark(card_id: str, number: int, new_lines: int) -> bool:
+    result = await _col("cards").update_one(
+        {"_id": _oid(card_id), "marked_numbers": {"$ne": number}},
+        {"$addToSet": {"marked_numbers": number}, "$set": {"completed_lines": new_lines}},
+    )
+    return result.modified_count == 1
+
+async def transition_mark_to_call(room_id: str, marker_id: int) -> Optional[Dict]:
+    doc = await _col("rooms").find_one_and_update(
+        {"_id": _oid(room_id), "status": "playing", "phase": "mark", "marker_id": marker_id},
+        {"$set": {"current_turn": marker_id, "phase": "call"}},
+        return_document=ReturnDocument.AFTER,
+    )
+    return _to_dict(doc)
+
 async def join_room(room_id: str, player2_id: int):
     await _col("rooms").update_one(
         {"_id": _oid(room_id), "status": "waiting"},
@@ -160,15 +202,15 @@ async def join_room(room_id: str, player2_id: int):
 
 
 async def create_card(room_id: str, player_id: int, numbers: List[int]) -> str:
-    result = await _col("cards").insert_one({
-        "room_id": room_id,
-        "player_id": player_id,
-        "numbers": numbers,
-        "marked_numbers": [],
-        "completed_lines": 0,
-        "card_message_id": None,
-    })
-    return str(result.inserted_id)
+    await _col("cards").update_one(
+        {"room_id": room_id, "player_id": player_id},
+        {"$setOnInsert": {"room_id": room_id, "player_id": player_id,
+                          "numbers": numbers, "marked_numbers": [],
+                          "completed_lines": 0, "card_message_id": None}},
+        upsert=True,
+    )
+    doc = await _col("cards").find_one({"room_id": room_id, "player_id": player_id})
+    return str(doc["_id"])
 
 
 async def get_card(room_id: str, player_id: int) -> Optional[Dict]:
@@ -414,6 +456,35 @@ async def get_tournament_match(match_id: str) -> Optional[Dict]:
 async def update_tournament_match(match_id: str, **kwargs):
     await _col("tournament_matches").update_one({"_id":_oid(match_id)}, {"$set":kwargs})
 
+async def claim_tournament_call(match_id: str, player_id: int, number: int) -> Optional[Dict]:
+    doc = await _col("tournament_matches").find_one_and_update(
+        {"_id": _oid(match_id), "status": "playing", "phase": "call",
+         "current_turn": player_id, "called_numbers": {"$ne": number}},
+        {"$push": {"called_numbers": number},
+         "$set": {"last_called": number, "phase": "mark"}},
+        return_document=ReturnDocument.AFTER,
+    )
+    if doc is not None:
+        marker = doc.get("p2") if player_id == doc.get("p1") else doc.get("p1")
+        await _col("tournament_matches").update_one({"_id": doc["_id"]}, {"$set": {"marker_id": marker}})
+        doc["marker_id"] = marker
+    return _to_dict(doc)
+
+async def claim_tournament_mark(card_id: str, number: int, new_lines: int) -> bool:
+    result = await _col("tournament_cards").update_one(
+        {"_id": _oid(card_id), "marked_numbers": {"$ne": number}},
+        {"$addToSet": {"marked_numbers": number}, "$set": {"completed_lines": new_lines}},
+    )
+    return result.modified_count == 1
+
+async def transition_tournament_mark_to_call(match_id: str, player_id: int) -> Optional[Dict]:
+    doc = await _col("tournament_matches").find_one_and_update(
+        {"_id": _oid(match_id), "status": "playing", "phase": "mark", "marker_id": player_id},
+        {"$set": {"current_turn": player_id, "phase": "call"}},
+        return_document=ReturnDocument.AFTER,
+    )
+    return _to_dict(doc)
+
 async def get_tournament_matches(tournament_id: str, round_no: int) -> List[Dict]:
     docs=await _col("tournament_matches").find({"tournament_id":tournament_id,"round":round_no}).sort("match_number",1).to_list(length=None)
     return [_to_dict(d) for d in docs]
@@ -425,7 +496,12 @@ async def clear_round_matches(tournament_id: str, round_no: int):
     await _col("tournament_matches").delete_many({"tournament_id":tournament_id,"round":round_no})
 
 async def create_tournament_card(match_id: str, player_id: int, numbers: List[int]):
-    await _col("tournament_cards").insert_one({"match_id":match_id,"player_id":player_id,"numbers":numbers,"marked_numbers":[],"completed_lines":0})
+    await _col("tournament_cards").update_one(
+        {"match_id": match_id, "player_id": player_id},
+        {"$setOnInsert": {"match_id": match_id, "player_id": player_id, "numbers": numbers,
+                          "marked_numbers": [], "completed_lines": 0, "card_message_id": None}},
+        upsert=True,
+    )
 
 async def get_tournament_card(match_id: str, player_id: int) -> Optional[Dict]:
     doc=await _col("tournament_cards").find_one({"match_id":match_id,"player_id":player_id})
