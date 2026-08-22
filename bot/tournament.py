@@ -340,64 +340,100 @@ async def handle_announce_callback(update: Update, context: ContextTypes.DEFAULT
     await q.answer(f'Sent to {sent} targets; {failed} failed.', show_alert=True)
 
 
-async def handle_tournament_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    uid = q.from_user.id
-    tid = q.data.split(':', 1)[1]
+async def _register_free_tournament_player(context: ContextTypes.DEFAULT_TYPE, tid: str, uid: int, username: str, first_name: str):
+    """Register a player in a free tournament and return (ok, message, registration_no, tournament)."""
     t = await db.get_tournament(tid)
-    if not t or t['status'] != 'registration':
-        await q.answer('Tournament is not accepting registrations.', show_alert=True); return
+    if not t:
+        return False, '❌ Tournament ID not found.', None, None
+    if t.get('status') != 'registration':
+        return False, '❌ Tournament is not accepting registrations.', None, t
+    if t.get('type') != 'free':
+        return False, '❌ This is a paid tournament. Contact the owner to register.', None, t
+
     if not await db.get_user(uid):
-        await db.create_user(uid, q.from_user.username or '', q.from_user.first_name or '')
-    if t['type'] != 'free':
-        await q.answer('Paid tournament players are registered manually by the owner.', show_alert=True); return
-    if uid in t.get('players', []):
-        await q.answer('You are already registered.', show_alert=True); return
-    if len(t.get('players', [])) >= t['max_players']:
-        await q.answer('Tournament is full.', show_alert=True); return
+        await db.create_user(uid, username or '', first_name or '')
+
+    players = list(t.get('players', []))
+    if uid in players:
+        registration_no = players.index(uid) + 1
+        return False, f'ℹ️ You are already registered: {registration_no}/{t.get("max_players", 0)}', registration_no, t
+    if len(players) >= int(t.get('max_players', 0)):
+        return False, '❌ Tournament is full.', None, t
+
     registration_no = await db.add_tournament_player(tid, uid)
     if registration_no is None:
-        # A concurrent click may have registered the player first.
         latest = await db.get_tournament(tid)
         current_players = list(latest.get('players', [])) if latest else []
         if uid in current_players:
             registration_no = current_players.index(uid) + 1
-            await q.answer(f'✅ You are already registered: {registration_no}/{len(current_players)}', show_alert=True)
-        else:
-            await q.answer('❌ Registration failed. Please try again.', show_alert=True)
-        return
+            return False, f'ℹ️ You are already registered: {registration_no}/{latest.get("max_players", 0)}', registration_no, latest
+        return False, '❌ Registration failed. Please try again.', None, latest
 
     latest = await db.get_tournament(tid) or t
-    total_registered = len(latest.get('players', []))
-    name = display_name(q.from_user)
-    username = f'@{q.from_user.username}' if q.from_user.username else 'No username'
+    return True, f'🎉 Successfully joined!\nRegistration: {registration_no}/{latest.get("max_players", 0)}', registration_no, latest
 
-    # Telegram popup shown immediately after the Join button is pressed.
-    await q.answer(
-        f'🎉 Successfully joined!\nRegistration: {registration_no}/{t["max_players"]}',
-        show_alert=True,
+
+async def _post_tournament_registration(context: ContextTypes.DEFAULT_TYPE, t: dict, uid: int, username: str, first_name: str, registration_no: int):
+    if not TOURNAMENT_CHANNEL:
+        return
+    total_registered = len(t.get('players', []))
+    name = first_name or username or str(uid)
+    username_text = f'@{username}' if username else 'No username'
+    try:
+        await context.bot.send_message(
+            TOURNAMENT_CHANNEL,
+            f'🎟️ <b>PLAYER REGISTERED</b>\n\n'
+            f'🏆 Tournament: <b>{_esc(t.get("name", "Tournament"))}</b>\n'
+            f'🔢 Registration No.: <b>{registration_no}/{t.get("max_players", 0)}</b>\n'
+            f'👤 Name: <b>{_esc(name)}</b>\n'
+            f'🔗 Username: <b>{_esc(username_text)}</b>\n'
+            f'🆔 Telegram ID: <code>{uid}</code>\n'
+            f'👥 Registered Players: <b>{total_registered}/{t.get("max_players", 0)}</b>',
+            parse_mode='HTML',
+        )
+    except Exception:
+        pass
+
+
+async def cmd_tjoin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Allow players to register for a FREE tournament directly with its tournament ID."""
+    if not context.args:
+        await update.message.reply_text('Usage: <code>/tjoin TOURNAMENT_ID</code>\n\nExample: <code>/tjoin abc123</code>', parse_mode='HTML')
+        return
+
+    tid = context.args[0].strip()
+    user = update.effective_user
+    ok, message, registration_no, t = await _register_free_tournament_player(
+        context, tid, user.id, user.username or '', user.first_name or ''
     )
+    await update.message.reply_text(message)
+    if ok:
+        await _post_tournament_registration(
+            context, t, user.id, user.username or '', user.first_name or '', registration_no
+        )
+
+
+async def handle_tournament_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    uid = q.from_user.id
+    tid = q.data.split(':', 1)[1]
+
+    ok, message, registration_no, latest = await _register_free_tournament_player(
+        context, tid, uid, q.from_user.username or '', q.from_user.first_name or ''
+    )
+    if not ok:
+        await q.answer(message, show_alert=True)
+        return
+
+    await q.answer(message, show_alert=True)
     try:
         await q.edit_message_reply_markup(reply_markup=await _announcement_keyboard(latest))
     except Exception:
         pass
 
-    # Official channel gets the full registration details and live count.
-    if TOURNAMENT_CHANNEL:
-        try:
-            await context.bot.send_message(
-                TOURNAMENT_CHANNEL,
-                f'🎟️ <b>PLAYER REGISTERED</b>\n\n'
-                f'🏆 Tournament: <b>{_esc(t["name"])}</b>\n'
-                f'🔢 Registration No.: <b>{registration_no}/{t["max_players"]}</b>\n'
-                f'👤 Name: <b>{_esc(name)}</b>\n'
-                f'🔗 Username: <b>{_esc(username)}</b>\n'
-                f'🆔 Telegram ID: <code>{uid}</code>\n'
-                f'👥 Registered Players: <b>{total_registered}/{t["max_players"]}</b>',
-                parse_mode='HTML',
-            )
-        except Exception:
-            pass
+    await _post_tournament_registration(
+        context, latest, uid, q.from_user.username or '', q.from_user.first_name or '', registration_no
+    )
 
 
 async def cmd_tadd(update: Update, context: ContextTypes.DEFAULT_TYPE):

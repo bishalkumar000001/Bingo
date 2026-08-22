@@ -28,7 +28,7 @@ from game import (
 from economy import award_winner, record_loss, process_forfeit
 from leaderboard import build_leaderboard_text, build_leaderboard_keyboard
 from tournament import (
-    cmd_tournament, cmd_tournamentinfo, cmd_announce, cmd_tadd, cmd_tstart,
+    cmd_tournament, cmd_tournamentinfo, cmd_tjoin, cmd_announce, cmd_tadd, cmd_tstart,
     handle_tournament_wizard_callback, handle_tournament_join,
     handle_tournament_card, handle_tournament_disqualify,
     handle_announce_callback, handle_tstart_callback,
@@ -668,6 +668,7 @@ def main():
     app = (
         Application.builder()
         .token(token)
+        .concurrent_updates(64)
         .post_init(post_init)
         .build()
     )
@@ -685,6 +686,7 @@ def main():
     app.add_handler(CommandHandler("give", cmd_give))
     app.add_handler(CommandHandler("tournament", cmd_tournament))
     app.add_handler(CommandHandler("tournamentinfo", cmd_tournamentinfo))
+    app.add_handler(CommandHandler("tjoin", cmd_tjoin))
     app.add_handler(CommandHandler("announce", cmd_announce))
     app.add_handler(CommandHandler("tadd", cmd_tadd))
     app.add_handler(CommandHandler("tstart", cmd_tstart))
