@@ -411,25 +411,34 @@ async def _players_text(context, ids: List[int]) -> List[str]:
 
 
 async def _start_match(context, tid: str, round_no: int, match: dict):
-    room_id = match['id']
-    room = await db.get_tournament_match(room_id)
-    names = await _players_text(context, [match['p1'], match['p2']])
+    # Always use the canonical MongoDB match document.  Older tournament
+    # documents can have a different/partial shape, so never trust the
+    # in-memory object passed by the launcher for player fields.
+    room_id = match.get('id')
+    room = await db.get_tournament_match(room_id) if room_id else None
+    if not room or room.get('p1') is None or room.get('p2') is None:
+        # A stale/malformed match must never crash the whole tournament.
+        if room_id:
+            await db.update_tournament_match(room_id, status='invalid')
+        return
+    p1, p2 = room['p1'], room['p2']
+    names = await _players_text(context, [p1, p2])
     msg = await context.bot.send_message(
         chat_id=TOURNAMENT_GROUP_ID,
-        text=f"🏆 <b>{_esc((await db.get_tournament(tid))['name'])}</b> — Round {round_no}\n\n🎮 Match <b>#{match['number']}</b>\n👤 {names[0]}\n⚔️ {names[1]}\n\n⏳ Starting...",
+        text=f"🏆 <b>{_esc((await db.get_tournament(tid))['name'])}</b> — Round {round_no}\n\n🎮 Match <b>#{room.get('match_number', 0)}</b>\n👤 {names[0]}\n⚔️ {names[1]}\n\n⏳ Starting...",
         parse_mode='HTML'
     )
     await db.update_tournament_match(room_id, group_message_id=msg.message_id)
     await asyncio.sleep(3)
-    await db.update_tournament_match(room_id, status='playing', current_turn=match['p1'], phase='call')
-    existing1 = await db.get_tournament_card(room_id, match['p1'])
-    existing2 = await db.get_tournament_card(room_id, match['p2'])
+    await db.update_tournament_match(room_id, status='playing', current_turn=p1, phase='call')
+    existing1 = await db.get_tournament_card(room_id, p1)
+    existing2 = await db.get_tournament_card(room_id, p2)
     if not existing1:
-        await db.create_tournament_card(room_id, match['p1'], random.sample(range(1,26),25))
+        await db.create_tournament_card(room_id, p1, random.sample(range(1,26),25))
     if not existing2:
-        await db.create_tournament_card(room_id, match['p2'], random.sample(range(1,26),25))
-    await _send_tournament_card(context, room_id, match['p1'])
-    await _send_tournament_card(context, room_id, match['p2'])
+        await db.create_tournament_card(room_id, p2, random.sample(range(1,26),25))
+    await _send_tournament_card(context, room_id, p1)
+    await _send_tournament_card(context, room_id, p2)
     await _send_match_panel(context, room_id)
 
 
