@@ -15,3 +15,7 @@ services:
         sync: false
       - key: SUPPORT_CHANNEL
         sync: false
+      - key: TOURNAMENT_CHANNEL_ID
+        sync: false
+      - key: TOURNAMENT_TIMEZONE
+        value: Asia/Kolkata
