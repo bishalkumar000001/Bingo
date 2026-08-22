@@ -733,9 +733,14 @@ async def handle_tournament_card(update: Update, context: ContextTypes.DEFAULT_T
             room = new_room
             marker = room.get('marker_id')
             await q.answer(f'📢 Called {n}!')
-            # Visual updates happen after the immediate Telegram acknowledgement.
+            # Match the normal-game flow exactly: refresh BOTH private cards
+            # immediately after a call.  The caller's card must also refresh,
+            # even though only the opponent is the marker for this phase.
+            caller = uid
+            opponent = room['p1'] if caller == room['p2'] else room['p2']
             await asyncio.gather(
-                _send_tournament_card(context, room_id, marker),
+                _send_tournament_card(context, room_id, caller),
+                _send_tournament_card(context, room_id, opponent),
                 _send_match_panel(context, room_id),
             )
             return
