@@ -27,14 +27,15 @@ from game import (
 )
 from economy import award_winner, record_loss, process_forfeit
 from leaderboard import build_leaderboard_text, build_leaderboard_keyboard
+from tournament import (
+    cmd_tournament, cmd_tournamentinfo, cmd_announce, cmd_tadd, cmd_tstart,
+    handle_tournament_wizard_callback, handle_tournament_join,
+    handle_tournament_card, handle_tournament_disqualify,
+    handle_announce_callback, handle_tstart_callback,
+    handle_tournament_wizard_message, recover_tournaments,
+)
 from utils import display_name_from_db, display_name
 from models import LINES_TO_WIN, WIN_COINS, FORFEIT_COST, CANCEL_FREE_THRESHOLD, OWNER_ID, OWNER_IDS, LOGGER_GROUP_ID, SUPPORT_CHANNEL
-from tournament import (
-    cmd_tournament_create, cmd_tournament_manage, cmd_tournament_dq, cmd_tournament_start,
-    cmd_tournament_winner, tournament_setup_callback, tournament_join_callback,
-    handle_tournament_input,
-)
-
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
@@ -607,10 +608,18 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
 
-    if data.startswith("tr:join:"):
-        await tournament_join_callback(update, context)
-    elif data.startswith("ts:"):
-        await tournament_setup_callback(update, context)
+    if data.startswith("tw:"):
+        await handle_tournament_wizard_callback(update, context)
+    elif data.startswith("tann:"):
+        await handle_announce_callback(update, context)
+    elif data.startswith("tjoin:"):
+        await handle_tournament_join(update, context)
+    elif data.startswith("tstart:"):
+        await handle_tstart_callback(update, context)
+    elif data.startswith("tcard:"):
+        await handle_tournament_card(update, context)
+    elif data.startswith("tdq:"):
+        await handle_tournament_disqualify(update, context)
     elif data.startswith("join:"):
         await handle_join_callback(update, context)
     elif data.startswith("cancel_room:"):
@@ -641,42 +650,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
 
 
-async def tournament_scheduler(application: Application):
-    # Lightweight scheduler: no extra dependency required, works on Render workers.
-    while True:
-        try:
-            from datetime import datetime, timezone
-            from tournament import start_tournament
-            now = datetime.now(timezone.utc)
-            for t in await db.get_open_tournaments():
-                start_at = t.get("start_at")
-                # MongoDB/JSON-backed records may return start_at as an ISO string.
-                # Normalize it to an aware UTC datetime before comparing with `now`.
-                if isinstance(start_at, str):
-                    try:
-                        start_at = start_at.strip()
-                        if start_at.endswith("Z"):
-                            start_at = start_at[:-1] + "+00:00"
-                        start_at = datetime.fromisoformat(start_at)
-                    except (TypeError, ValueError):
-                        logger.warning("Invalid tournament start_at for %s: %r", t.get("id"), t.get("start_at"))
-                        continue
-                if isinstance(start_at, datetime) and start_at.tzinfo is None:
-                    start_at = start_at.replace(tzinfo=timezone.utc)
-                if t.get("status") in ("registration", "scheduled") and start_at and now >= start_at:
-                    if await db.tournament_player_count(t["id"]) >= int(t.get("min_players", 2)):
-                        await start_tournament(application, t["id"])
-                    else:
-                        await db.update_tournament(t["id"], status="cancelled", cancel_reason="Minimum player count was not reached before start time")
-        except Exception as exc:
-            logger.exception("Tournament scheduler error: %s", exc)
-        await asyncio.sleep(30)
-
 
 async def post_init(application: Application):
     await db.init_db()
-    application.create_task(tournament_scheduler(application))
     logger.info("Database initialized.")
+    try:
+        await recover_tournaments(application)
+    except Exception:
+        logger.exception("Tournament recovery failed")
 
 
 def main():
@@ -691,6 +672,7 @@ def main():
         .build()
     )
 
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_tournament_wizard_message), group=-5)
     app.add_handler(MessageHandler(filters.ChatType.GROUPS, register_group_activity), group=-10)
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
@@ -701,12 +683,11 @@ def main():
     app.add_handler(CommandHandler("stopbingo", cmd_stopbingo))
     app.add_handler(CommandHandler("broadcast", cmd_broadcast))
     app.add_handler(CommandHandler("give", cmd_give))
-    app.add_handler(CommandHandler("tournament_create", cmd_tournament_create))
-    app.add_handler(CommandHandler("tournament_manage", cmd_tournament_manage))
-    app.add_handler(CommandHandler("tournament_dq", cmd_tournament_dq))
-    app.add_handler(CommandHandler("tournament_start", cmd_tournament_start))
-    app.add_handler(CommandHandler("tournament_winner", cmd_tournament_winner))
-    app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, handle_tournament_input), group=0)
+    app.add_handler(CommandHandler("tournament", cmd_tournament))
+    app.add_handler(CommandHandler("tournamentinfo", cmd_tournamentinfo))
+    app.add_handler(CommandHandler("announce", cmd_announce))
+    app.add_handler(CommandHandler("tadd", cmd_tadd))
+    app.add_handler(CommandHandler("tstart", cmd_tstart))
     app.add_handler(ChatMemberHandler(handle_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
     app.add_handler(CallbackQueryHandler(handle_callback))
 

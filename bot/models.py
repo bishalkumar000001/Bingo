@@ -33,6 +33,15 @@ LOGGER_GROUP_ID = int(_logger) if _logger else None
 
 SUPPORT_CHANNEL = os.environ.get("SUPPORT_CHANNEL", "")
 
+_tgroup = os.environ.get("TOURNAMENT_GROUP_ID", "").strip()
+try:
+    TOURNAMENT_GROUP_ID = int(_tgroup) if _tgroup else None
+except ValueError:
+    TOURNAMENT_GROUP_ID = _tgroup or None
+
+TOURNAMENT_CHANNEL = os.environ.get("TOURNAMENT_CHANNEL", "").strip()
+OWNER_CONTACT_URL = os.environ.get("OWNER_CONTACT_URL", SUPPORT_CHANNEL or "https://t.me/").strip()
+
 ALL_LINES = [
     [0, 1, 2, 3, 4],
     [5, 6, 7, 8, 9],

@@ -44,11 +44,10 @@ async def init_db():
     await db["game_results"].create_index([("telegram_id", 1), ("created_at", -1)])
     await db["game_results"].create_index([("chat_id", 1), ("created_at", -1)])
     await db["game_results"].create_index([("won", 1), ("created_at", -1)])
-    await db["tournament_players"].create_index([("tournament_id", 1), ("telegram_id", 1)], unique=True)
-    await db["tournament_players"].create_index([("tournament_id", 1), ("status", 1)])
-    await db["tournament_matches"].create_index([("tournament_id", 1), ("round", 1), ("match_no", 1)])
-    await db["tournaments"].create_index([("status", 1), ("start_at", 1)])
     await db["known_groups"].create_index("chat_id", unique=True)
+    await db["tournaments"].create_index([("status", 1), ("created_at", -1)])
+    await db["tournament_matches"].create_index([("tournament_id", 1), ("round", 1)])
+    await db["tournament_cards"].create_index([("match_id", 1), ("player_id", 1)], unique=True)
 
 
 async def register_group(chat_id: int, title: str = "", username: str = ""):
@@ -102,15 +101,6 @@ async def get_active_rooms_in_chat(chat_id: int) -> List[Dict]:
     return [_to_dict(d) for d in docs]
 
 
-async def get_next_tournament_room_number(chat_id: int) -> int:
-    """Return a unique room number above the normal public room slots."""
-    active = await get_active_rooms_in_chat(chat_id)
-    used = {int(r.get("room_number", 0)) for r in active}
-    n = 1000
-    while n in used:
-        n += 1
-    return n
-
 async def get_next_room_number(chat_id: int) -> int:
     active = await get_active_rooms_in_chat(chat_id)
     used = {r["room_number"] for r in active}
@@ -129,7 +119,7 @@ async def is_player_in_active_room(player_id: int) -> bool:
 
 
 async def create_room(chat_id: int, room_number: int, player1_id: int,
-                      room_message_id: int, stake_amount: int = 0, tournament_match_id: str = None) -> str:
+                      room_message_id: int, stake_amount: int = 0) -> str:
     result = await _col("rooms").insert_one({
         "room_number": room_number,
         "chat_id": chat_id,
@@ -145,7 +135,6 @@ async def create_room(chat_id: int, room_number: int, player1_id: int,
         "group_panel_message_id": None,
         "room_message_id": room_message_id,
         "stake_amount": stake_amount,
-        "tournament_match_id": tournament_match_id,
         "created_at": datetime.now(timezone.utc),
     })
     return str(result.inserted_id)
@@ -368,86 +357,68 @@ async def find_user_by_username(username: str) -> Optional[Dict]:
     doc = await _col("users").find_one({"username": username})
     return _to_dict(doc)
 
-# ───────────────────────────── Tournament System ─────────────────────────────
-async def create_tournament(data: Dict) -> str:
-    payload = dict(data)
-    payload.update({"status": "registration", "created_at": datetime.now(timezone.utc), "announcement_message_id": None})
-    result = await _col("tournaments").insert_one(payload)
+
+# ---------------- Tournament storage ----------------
+async def create_tournament(data: Dict, owner_id: int) -> str:
+    doc = dict(data)
+    doc.update({"owner_id": owner_id, "status": "registration", "winner_id": None,
+                "current_round": 0, "created_at": datetime.now(timezone.utc)})
+    result = await _col("tournaments").insert_one(doc)
     return str(result.inserted_id)
 
 async def get_tournament(tournament_id: str) -> Optional[Dict]:
-    try:
-        return _to_dict(await _col("tournaments").find_one({"_id": _oid(tournament_id)}))
-    except Exception:
-        return None
+    try: doc = await _col("tournaments").find_one({"_id": _oid(tournament_id)})
+    except Exception: return None
+    return _to_dict(doc)
 
 async def update_tournament(tournament_id: str, **kwargs):
-    if kwargs:
-        await _col("tournaments").update_one({"_id": _oid(tournament_id)}, {"$set": kwargs})
+    await _col("tournaments").update_one({"_id": _oid(tournament_id)}, {"$set": kwargs})
 
-async def tournament_player_count(tournament_id: str, active_only: bool = True) -> int:
-    q = {"tournament_id": tournament_id}
-    if active_only:
-        q["status"] = "registered"
-    return await _col("tournament_players").count_documents(q)
+async def add_tournament_player(tournament_id: str, user_id: int):
+    await _col("tournaments").update_one({"_id": _oid(tournament_id), "players": {"$ne": user_id}}, {"$addToSet": {"players": user_id}})
 
-async def tournament_player_exists(tournament_id: str, telegram_id: int) -> bool:
-    return await _col("tournament_players").find_one({"tournament_id": tournament_id, "telegram_id": telegram_id}) is not None
+async def get_latest_tournament_id() -> Optional[str]:
+    doc = await _col("tournaments").find_one({}, sort=[("created_at", -1)])
+    return str(doc["_id"]) if doc else None
 
-async def add_tournament_player(tournament_id: str, telegram_id: int, username: str, first_name: str):
-    await _col("tournament_players").update_one(
-        {"tournament_id": tournament_id, "telegram_id": telegram_id},
-        {"$set": {"username": username or "", "first_name": first_name or "", "status": "registered", "registered_at": datetime.now(timezone.utc)}, "$setOnInsert": {"tournament_id": tournament_id, "telegram_id": telegram_id}},
-        upsert=True,
-    )
+async def create_tournament_match(tournament_id: str, round_no: int, p1: int, p2: Optional[int], match_number: int = 1, status: str = "pending") -> str:
+    r = await _col("tournament_matches").insert_one({"tournament_id": tournament_id,"round":round_no,"match_number":match_number,"p1":p1,"p2":p2,"status":status,"current_turn":p1,"phase":"call","called_numbers":[],"last_called":None,"marker_id":None,"winner_id":None,"loser_id":None,"group_message_id":None,"created_at":datetime.now(timezone.utc)})
+    return str(r.inserted_id)
 
-async def get_tournament_players(tournament_id: str, active_only: bool = True) -> List[Dict]:
-    q = {"tournament_id": tournament_id}
-    if active_only:
-        q["status"] = "registered"
-    docs = await _col("tournament_players").find(q).sort("registered_at", 1).to_list(length=None)
-    return [_to_dict(d) for d in docs]
-
-async def disqualify_tournament_player(tournament_id: str, telegram_id: int, reason: str) -> bool:
-    result = await _col("tournament_players").update_one(
-        {"tournament_id": tournament_id, "telegram_id": telegram_id, "status": "registered"},
-        {"$set": {"status": "disqualified", "dq_reason": reason, "disqualified_at": datetime.now(timezone.utc)}}
-    )
-    # Also resolve any active match where this player is present by advancing the opponent.
-    match = await _col("tournament_matches").find_one({"tournament_id": tournament_id, "status": "pending", "$or": [{"player1_id": telegram_id}, {"player2_id": telegram_id}]})
-    if match:
-        opponent = match.get("player2_id") if match.get("player1_id") == telegram_id else match.get("player1_id")
-        if opponent:
-            await _col("tournament_matches").update_one({"_id": match["_id"]}, {"$set": {"status": "completed", "winner_id": opponent, "resolution": "DQ"}})
-    return result.modified_count > 0
-
-async def clear_tournament_matches(tournament_id: str, round_no: Optional[int] = None):
-    q = {"tournament_id": tournament_id}
-    if round_no is not None: q["round"] = round_no
-    await _col("tournament_matches").delete_many(q)
-
-async def create_tournament_match(tournament_id: str, round_no: int, match_no: int, player1_id: int, player2_id: Optional[int]) -> str:
-    result = await _col("tournament_matches").insert_one({"tournament_id": tournament_id, "round": round_no, "match_no": match_no, "player1_id": player1_id, "player2_id": player2_id, "status": "pending", "winner_id": None, "created_at": datetime.now(timezone.utc)})
-    return str(result.inserted_id)
-
-async def get_tournament_matches(tournament_id: str, round_no: Optional[int] = None) -> List[Dict]:
-    q = {"tournament_id": tournament_id}
-    if round_no is not None: q["round"] = round_no
-    docs = await _col("tournament_matches").find(q).sort("match_no", 1).to_list(length=None)
-    return [_to_dict(d) for d in docs]
+async def create_tournament_bye(tournament_id: str, round_no: int, player_id: int):
+    await _col("tournament_matches").insert_one({"tournament_id":tournament_id,"round":round_no,"match_number":0,"p1":player_id,"p2":None,"status":"bye","winner_id":player_id,"created_at":datetime.now(timezone.utc)})
 
 async def get_tournament_match(match_id: str) -> Optional[Dict]:
-    try:
-        return _to_dict(await _col("tournament_matches").find_one({"_id": _oid(match_id)}))
-    except Exception:
-        return None
+    try: doc=await _col("tournament_matches").find_one({"_id":_oid(match_id)})
+    except Exception: return None
+    return _to_dict(doc)
 
-async def attach_tournament_match_room(match_id: str, room_id: str):
-    await _col("tournament_matches").update_one({"_id": _oid(match_id)}, {"$set": {"room_id": room_id, "room_created_at": datetime.now(timezone.utc)}})
+async def update_tournament_match(match_id: str, **kwargs):
+    await _col("tournament_matches").update_one({"_id":_oid(match_id)}, {"$set":kwargs})
 
-async def resolve_tournament_match(match_id: str, winner_id: int, resolution: str = "WINNER"):
-    await _col("tournament_matches").update_one({"_id": _oid(match_id), "status": "pending"}, {"$set": {"status": "completed", "winner_id": winner_id, "resolution": resolution, "completed_at": datetime.now(timezone.utc)}})
+async def get_tournament_matches(tournament_id: str, round_no: int) -> List[Dict]:
+    docs=await _col("tournament_matches").find({"tournament_id":tournament_id,"round":round_no}).sort("match_number",1).to_list(length=None)
+    return [_to_dict(d) for d in docs]
 
-async def get_open_tournaments() -> List[Dict]:
-    docs = await _col("tournaments").find({"status": {"$in": ["registration", "scheduled", "running"]}}).to_list(length=None)
+async def clear_tournament_matches(tournament_id: str):
+    await _col("tournament_matches").delete_many({"tournament_id":tournament_id})
+
+async def clear_round_matches(tournament_id: str, round_no: int):
+    await _col("tournament_matches").delete_many({"tournament_id":tournament_id,"round":round_no})
+
+async def create_tournament_card(match_id: str, player_id: int, numbers: List[int]):
+    await _col("tournament_cards").insert_one({"match_id":match_id,"player_id":player_id,"numbers":numbers,"marked_numbers":[],"completed_lines":0})
+
+async def get_tournament_card(match_id: str, player_id: int) -> Optional[Dict]:
+    doc=await _col("tournament_cards").find_one({"match_id":match_id,"player_id":player_id})
+    return _to_dict(doc)
+
+async def update_tournament_card(card_id: str, **kwargs):
+    await _col("tournament_cards").update_one({"_id":_oid(card_id)}, {"$set":kwargs})
+
+async def cancel_running_tournaments():
+    await _col("tournaments").update_many({"status":"running"},{"$set":{"status":"interrupted"}})
+
+async def get_running_tournaments() -> List[Dict]:
+    docs=await _col("tournaments").find({"status":"running"}).to_list(length=None)
     return [_to_dict(d) for d in docs]
