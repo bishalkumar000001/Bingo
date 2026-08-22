@@ -7,7 +7,9 @@ from telegram.ext import (
     CommandHandler,
     CallbackQueryHandler,
     ChatMemberHandler,
+    MessageHandler,
     ContextTypes,
+    filters,
 )
 from telegram.error import BadRequest, Forbidden
 from webserver import start_webserver
@@ -27,6 +29,11 @@ from economy import award_winner, record_loss, process_forfeit
 from leaderboard import build_leaderboard_text, build_leaderboard_keyboard
 from utils import display_name_from_db, display_name
 from models import LINES_TO_WIN, WIN_COINS, FORFEIT_COST, CANCEL_FREE_THRESHOLD, OWNER_ID, LOGGER_GROUP_ID, SUPPORT_CHANNEL
+from tournament import (
+    cmd_tournament_create, cmd_tournament_manage, cmd_tournament_dq, cmd_tournament_start,
+    cmd_tournament_winner, tournament_setup_callback, tournament_join_callback,
+    handle_tournament_input,
+)
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -523,6 +530,16 @@ async def cmd_give(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
 
 
+async def register_group_activity(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat = update.effective_chat
+    if not chat or chat.type not in ("group", "supergroup"):
+        return
+    try:
+        await db.register_group(chat.id, chat.title or "", chat.username or "")
+    except Exception:
+        pass
+
+
 async def handle_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not LOGGER_GROUP_ID:
         return
@@ -542,6 +559,10 @@ async def handle_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TY
     chat = result.chat
     if chat.type not in ("group", "supergroup"):
         return
+    try:
+        await db.register_group(chat.id, chat.title or "", chat.username or "")
+    except Exception:
+        pass
 
     added_by = result.from_user
     added_by_name = display_name(added_by) if added_by else "Unknown"
@@ -586,7 +607,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
 
-    if data.startswith("join:"):
+    if data.startswith("tr:join:"):
+        await tournament_join_callback(update, context)
+    elif data.startswith("ts:"):
+        await tournament_setup_callback(update, context)
+    elif data.startswith("join:"):
         await handle_join_callback(update, context)
     elif data.startswith("cancel_room:"):
         await handle_cancel_room_callback(update, context)
@@ -616,8 +641,27 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
 
 
+async def tournament_scheduler(application: Application):
+    # Lightweight scheduler: no extra dependency required, works on Render workers.
+    while True:
+        try:
+            from datetime import datetime, timezone
+            from tournament import start_tournament
+            now = datetime.now(timezone.utc)
+            for t in await db.get_open_tournaments():
+                if t.get("status") in ("registration", "scheduled") and t.get("start_at") and now >= t["start_at"]:
+                    if await db.tournament_player_count(t["id"]) >= int(t.get("min_players", 2)):
+                        await start_tournament(application, t["id"])
+                    else:
+                        await db.update_tournament(t["id"], status="cancelled", cancel_reason="Minimum player count was not reached before start time")
+        except Exception as exc:
+            logger.exception("Tournament scheduler error: %s", exc)
+        await asyncio.sleep(30)
+
+
 async def post_init(application: Application):
     await db.init_db()
+    application.create_task(tournament_scheduler(application))
     logger.info("Database initialized.")
 
 
@@ -633,6 +677,7 @@ def main():
         .build()
     )
 
+    app.add_handler(MessageHandler(filters.ChatType.GROUPS, register_group_activity), group=-10)
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("bingo", cmd_bingo))
@@ -642,6 +687,12 @@ def main():
     app.add_handler(CommandHandler("stopbingo", cmd_stopbingo))
     app.add_handler(CommandHandler("broadcast", cmd_broadcast))
     app.add_handler(CommandHandler("give", cmd_give))
+    app.add_handler(CommandHandler("tournament_create", cmd_tournament_create))
+    app.add_handler(CommandHandler("tournament_manage", cmd_tournament_manage))
+    app.add_handler(CommandHandler("tournament_dq", cmd_tournament_dq))
+    app.add_handler(CommandHandler("tournament_start", cmd_tournament_start))
+    app.add_handler(CommandHandler("tournament_winner", cmd_tournament_winner))
+    app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, handle_tournament_input), group=0)
     app.add_handler(ChatMemberHandler(handle_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
     app.add_handler(CallbackQueryHandler(handle_callback))
 

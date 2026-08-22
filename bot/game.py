@@ -592,10 +592,15 @@ async def handle_bingo_win(context, room, winner_id, p1, p2, called):
         except Exception:
             pass
     
-    await asyncio.gather(
-        award_winner(winner_id, chat_id),
-        record_loss(loser_id, chat_id),
-    )
+    if room.get("tournament_match_id"):
+        # Tournament games use the same Bingo engine but do not award the normal
+        # 500-coin match reward. Resolve the tournament bracket instead.
+        await db.resolve_tournament_match(room["tournament_match_id"], winner_id, "BINGO")
+    else:
+        await asyncio.gather(
+            award_winner(winner_id, chat_id),
+            record_loss(loser_id, chat_id),
+        )
 
     winner = p1 if winner_id == room["player1_id"] else p2
     loser = p2 if winner_id == room["player1_id"] else p1
@@ -710,6 +715,15 @@ async def handle_bingo_win(context, room, winner_id, p1, p2, called):
             except BadRequest:
                 pass
 
+
+    if room.get("tournament_match_id"):
+        try:
+            from tournament import advance_tournament
+            match = await db.get_tournament_match(room["tournament_match_id"])
+            if match:
+                await advance_tournament(context, match["tournament_id"], int(match["round"]))
+        except Exception:
+            pass
 
 async def _end_game_by_cancellation(context, room: dict, forfeiter_id: int, forfeiter_name: str):
     """Shared logic: close the room and clean up messages after a free cancel or forfeit."""
