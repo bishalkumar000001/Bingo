@@ -4,6 +4,7 @@ from datetime import datetime, timezone, timedelta
 
 import motor.motor_asyncio
 from bson import ObjectId
+from pymongo import ReturnDocument
 
 MONGODB_URI = os.environ.get("MONGODB_URI", "mongodb://localhost:27017")
 DB_NAME = "velocity_bingo"
@@ -374,8 +375,25 @@ async def get_tournament(tournament_id: str) -> Optional[Dict]:
 async def update_tournament(tournament_id: str, **kwargs):
     await _col("tournaments").update_one({"_id": _oid(tournament_id)}, {"$set": kwargs})
 
-async def add_tournament_player(tournament_id: str, user_id: int):
-    await _col("tournaments").update_one({"_id": _oid(tournament_id), "players": {"$ne": user_id}}, {"$addToSet": {"players": user_id}})
+async def add_tournament_player(tournament_id: str, user_id: int) -> Optional[int]:
+    """Atomically register a player and return their 1-based registration number.
+
+    Returning the updated document makes the registration count safe when two
+    players press Join at nearly the same time. Returns None if already
+    registered or the tournament was not found.
+    """
+    doc = await _col("tournaments").find_one_and_update(
+        {"_id": _oid(tournament_id), "players": {"$ne": user_id}},
+        {"$push": {"players": user_id}},
+        return_document=ReturnDocument.AFTER,
+    )
+    if not doc:
+        return None
+    players = doc.get("players", [])
+    try:
+        return players.index(user_id) + 1
+    except ValueError:
+        return None
 
 async def get_latest_tournament_id() -> Optional[str]:
     doc = await _col("tournaments").find_one({}, sort=[("created_at", -1)])

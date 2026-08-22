@@ -353,16 +353,47 @@ async def handle_tournament_join(update: Update, context: ContextTypes.DEFAULT_T
         await q.answer('You are already registered.', show_alert=True); return
     if len(t.get('players', [])) >= t['max_players']:
         await q.answer('Tournament is full.', show_alert=True); return
-    await db.add_tournament_player(tid, uid)
-    await q.answer('🎉 You joined the tournament!')
+    registration_no = await db.add_tournament_player(tid, uid)
+    if registration_no is None:
+        # A concurrent click may have registered the player first.
+        latest = await db.get_tournament(tid)
+        current_players = list(latest.get('players', [])) if latest else []
+        if uid in current_players:
+            registration_no = current_players.index(uid) + 1
+            await q.answer(f'✅ You are already registered: {registration_no}/{len(current_players)}', show_alert=True)
+        else:
+            await q.answer('❌ Registration failed. Please try again.', show_alert=True)
+        return
+
+    latest = await db.get_tournament(tid) or t
+    total_registered = len(latest.get('players', []))
+    name = display_name(q.from_user)
+    username = f'@{q.from_user.username}' if q.from_user.username else 'No username'
+
+    # Telegram popup shown immediately after the Join button is pressed.
+    await q.answer(
+        f'🎉 Successfully joined!\nRegistration: {registration_no}/{t["max_players"]}',
+        show_alert=True,
+    )
     try:
-        await q.edit_message_reply_markup(reply_markup=await _announcement_keyboard(t))
+        await q.edit_message_reply_markup(reply_markup=await _announcement_keyboard(latest))
     except Exception:
         pass
-    name = display_name(q.from_user)
+
+    # Official channel gets the full registration details and live count.
     if TOURNAMENT_CHANNEL:
         try:
-            await context.bot.send_message(TOURNAMENT_CHANNEL, f'🎟️ <b>{_esc(name)}</b> joined <b>{_esc(t["name"])}</b>.', parse_mode='HTML')
+            await context.bot.send_message(
+                TOURNAMENT_CHANNEL,
+                f'🎟️ <b>PLAYER REGISTERED</b>\n\n'
+                f'🏆 Tournament: <b>{_esc(t["name"])}</b>\n'
+                f'🔢 Registration No.: <b>{registration_no}/{t["max_players"]}</b>\n'
+                f'👤 Name: <b>{_esc(name)}</b>\n'
+                f'🔗 Username: <b>{_esc(username)}</b>\n'
+                f'🆔 Telegram ID: <code>{uid}</code>\n'
+                f'👥 Registered Players: <b>{total_registered}/{t["max_players"]}</b>',
+                parse_mode='HTML',
+            )
         except Exception:
             pass
 
@@ -390,12 +421,47 @@ async def cmd_tadd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
     if len(t.get('players', [])) >= t['max_players'] and uid not in t.get('players', []):
         await update.message.reply_text('❌ Tournament is full.'); return
-    await db.add_tournament_player(tid, uid)
-    await update.message.reply_text(f'✅ Added <code>{uid}</code> to {t["name"]}.', parse_mode='HTML')
+    registration_no = await db.add_tournament_player(tid, uid)
+    latest = await db.get_tournament(tid) or t
+    if registration_no is None:
+        players = list(latest.get('players', []))
+        registration_no = players.index(uid) + 1 if uid in players else None
+        if registration_no is None:
+            await update.message.reply_text('❌ Could not register this player.')
+            return
+        await update.message.reply_text(f'ℹ️ Player is already registered as #{registration_no}.')
+    else:
+        await update.message.reply_text(
+            f'✅ Added <code>{uid}</code> to {t["name"]}.\n🔢 Registration: <b>{registration_no}/{t["max_players"]}</b>',
+            parse_mode='HTML',
+        )
     try:
-        await context.bot.send_message(uid, f'🏆 You have been registered by the owner for <b>{_esc(t["name"])}</b>.', parse_mode='HTML')
+        await context.bot.send_message(
+            uid,
+            f'🏆 You have been registered by the owner for <b>{_esc(t["name"])}</b>.\n'
+            f'🔢 Registration: <b>{registration_no}/{t["max_players"]}</b>',
+            parse_mode='HTML',
+        )
     except Exception:
         pass
+    if TOURNAMENT_CHANNEL:
+        try:
+            chat = await context.bot.get_chat(uid)
+            pname = display_name(chat)
+            pusername = f'@{chat.username}' if getattr(chat, 'username', None) else 'No username'
+            await context.bot.send_message(
+                TOURNAMENT_CHANNEL,
+                f'🎟️ <b>PLAYER REGISTERED</b>\n\n'
+                f'🏆 Tournament: <b>{_esc(t["name"])}</b>\n'
+                f'🔢 Registration No.: <b>{registration_no}/{t["max_players"]}</b>\n'
+                f'👤 Name: <b>{_esc(pname)}</b>\n'
+                f'🔗 Username: <b>{_esc(pusername)}</b>\n'
+                f'🆔 Telegram ID: <code>{uid}</code>\n'
+                f'👥 Registered Players: <b>{len(latest.get("players", []))}/{t["max_players"]}</b>',
+                parse_mode='HTML',
+            )
+        except Exception:
+            pass
 
 
 async def _players_text(context, ids: List[int]) -> List[str]:
