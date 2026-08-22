@@ -56,10 +56,13 @@ def _money(n):
 
 
 def _draft_defaults():
+    # Keep tournament creation intentionally small: the bot only needs the
+    # player count, entry/prizes, channel and game group. Everything else is
+    # handled automatically.
     return {
         "name": "Velocity Bingo Tournament",
         "description": "",
-        "rules": "",
+        "rules": "Standard Velocity Bingo tournament rules apply.",
         "max_players": 32,
         "min_players": 2,
         "entry_fee": 0,
@@ -73,39 +76,35 @@ def _draft_defaults():
         "game_chat_id": TOURNAMENT_GAME_CHAT_ID,
         "timezone": TOURNAMENT_TZ,
         "type": "free",
+        "shuffle_players": True,
     }
 
 
 def _panel(d):
     typ = "Free" if int(d.get("entry_fee", 0)) == 0 else "Paid"
     return (
-        "🏆 <b>TOURNAMENT SETUP</b>\n\n"
+        "🏆 <b>SIMPLE TOURNAMENT SETUP</b>\n\n"
         f"📛 <b>Name:</b> {escape(str(d.get('name') or 'Not set'))}\n"
-        f"🎟 <b>Type:</b> {typ}\n"
-        f"👥 <b>Players:</b> {d.get('min_players', 2)}–{d.get('max_players', 32)}\n"
-        f"💳 <b>Entry:</b> 🪙 {_money(d.get('entry_fee', 0))}\n"
+        f"👥 <b>Players:</b> {d.get('max_players', 32)}\n"
+        f"🎟 <b>Entry:</b> 🪙 {_money(d.get('entry_fee', 0))} ({typ})\n"
         f"🥇 <b>1st:</b> 🪙 {_money(d.get('prize_1', 0))}\n"
         f"🥈 <b>2nd:</b> 🪙 {_money(d.get('prize_2', 0))}\n"
         f"🥉 <b>3rd:</b> 🪙 {_money(d.get('prize_3', 0))}\n"
-        f"🗓 <b>Start:</b> {_fmt_dt(d.get('start_at'))}\n"
-        f"⏳ <b>Registration closes:</b> {_fmt_dt(d.get('registration_deadline'))}\n"
         f"📢 <b>Channel:</b> {escape(str(d.get('channel_id') or 'Not set'))}\n"
-        f"🎮 <b>Game Group:</b> {escape(str(d.get('game_chat_id') or 'Not set'))}\n"
-        f"⚡ <b>Auto start:</b> {'ON' if d.get('auto_start') else 'OFF'}\n"
+        f"🎮 <b>Game Group:</b> {escape(str(d.get('game_chat_id') or 'Not set'))}\n\n"
+        "⚡ <b>Auto-start:</b> ON\n"
+        "🔀 <b>Matchmaking:</b> Shuffle + automatic rooms\n"
+        "\n<i>When the player limit is reached, all first-round rooms are created and started together.</i>"
     )
 
 
 def _setup_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📛 Name", callback_data="ts:name"), InlineKeyboardButton("📝 Description", callback_data="ts:description")],
-        [InlineKeyboardButton("📜 Rules", callback_data="ts:rules"), InlineKeyboardButton("👥 Players", callback_data="ts:players")],
+        [InlineKeyboardButton("📛 Name", callback_data="ts:name"), InlineKeyboardButton("👥 Players", callback_data="ts:players")],
         [InlineKeyboardButton("💳 Entry Fee", callback_data="ts:entry"), InlineKeyboardButton("🏆 Prizes", callback_data="ts:prizes")],
-        [InlineKeyboardButton("🗓 Start Time", callback_data="ts:start"), InlineKeyboardButton("⏳ Reg. Deadline", callback_data="ts:deadline")],
         [InlineKeyboardButton("📢 Channel", callback_data="ts:channel"), InlineKeyboardButton("🎮 Game Group", callback_data="ts:gamechat")],
-        [InlineKeyboardButton("⚡ Auto Start", callback_data="ts:auto"), InlineKeyboardButton("🔀 Shuffle & Rooms", callback_data="ts:shuffle")],
-        [InlineKeyboardButton("🔄 Free Tournament", callback_data="ts:free"), InlineKeyboardButton("💰 Paid Tournament", callback_data="ts:paid")],
         [InlineKeyboardButton("👁 Preview", callback_data="ts:preview"), InlineKeyboardButton("🚀 CREATE TOURNAMENT", callback_data="ts:create")],
-        [InlineKeyboardButton("❌ Cancel Setup", callback_data="ts:cancel")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="ts:cancel")],
     ])
 
 
@@ -134,73 +133,43 @@ async def tournament_setup_callback(update: Update, context: ContextTypes.DEFAUL
     if not d:
         await query.answer("Setup expired. Use /tournament_create again.", show_alert=True)
         return
+
     if data == "name":
-        await _ask(query, context, "name", "📛 Send the tournament <b>name</b>.")
-    elif data == "description":
-        await _ask(query, context, "description", "📝 Send the tournament description. Send <code>-</code> to clear it.")
-    elif data == "rules":
-        await _ask(query, context, "rules", "📜 Send the tournament rules. Send <code>-</code> to clear them.")
+        await _ask(query, context, "name", "📛 Send the tournament name.")
     elif data == "players":
-        await _ask(query, context, "players", "👥 Send player limits like <code>32</code> or <code>9 2</code> (max, min). Any max player count is supported.")
+        await _ask(query, context, "players", "👥 Send the total player count, e.g. <code>32</code>. Use an even number for clean 2-player matches.")
     elif data == "entry":
-        await _ask(query, context, "entry", "💳 Send entry fee in coins. Use <code>0</code> for free.")
+        await _ask(query, context, "entry", "💳 Send the entry fee in coins. Use <code>0</code> for free.")
     elif data == "prizes":
-        await _ask(query, context, "prizes", "🏆 Send prizes as <code>1st 2nd 3rd</code>, for example <code>100000 50000 25000</code>.")
-    elif data == "start":
-        await _ask(query, context, "start", f"🗓 Send start time in <code>YYYY-MM-DD HH:MM</code> ({TOURNAMENT_TZ}).")
-    elif data == "deadline":
-        await _ask(query, context, "deadline", f"⏳ Send registration deadline in <code>YYYY-MM-DD HH:MM</code> ({TOURNAMENT_TZ}), or <code>-</code> for no deadline.")
+        await _ask(query, context, "prizes", "🏆 Send prizes as <code>1st 2nd 3rd</code>, e.g. <code>100000 50000 25000</code>.")
     elif data == "channel":
-        await _ask(query, context, "channel", "📢 Send your channel ID (e.g. <code>-100123...</code>) or public @username. The bot must be able to post there.")
+        await _ask(query, context, "channel", "📢 Send the tournament channel ID (e.g. <code>-100123...</code>) or public @username.")
     elif data == "gamechat":
-        await _ask(query, context, "gamechat", "🎮 Send the group ID where tournament Bingo rooms should be created (e.g. <code>-100123...</code>). The bot must be admin there.")
-    elif data == "shuffle":
-        d["shuffle_players"] = not d.get("shuffle_players", True)
-        try:
-            await query.message.edit_text(_panel(d), parse_mode="HTML", reply_markup=_setup_keyboard())
-        except BadRequest as exc:
-            if "Message is not modified" not in str(exc):
-                raise
-        await query.answer("Shuffle updated")
-    elif data == "auto":
-        d["auto_start"] = not d.get("auto_start", True)
-        try:
-            await query.message.edit_text(_panel(d), parse_mode="HTML", reply_markup=_setup_keyboard())
-        except BadRequest as exc:
-            if "Message is not modified" not in str(exc):
-                raise
-        await query.answer("Auto start updated")
-    elif data == "free":
-        d["entry_fee"] = 0
-        d["type"] = "free"
-        try:
-            await query.message.edit_text(_panel(d), parse_mode="HTML", reply_markup=_setup_keyboard())
-        except BadRequest as exc:
-            if "Message is not modified" not in str(exc):
-                raise
-        await query.answer("Free tournament selected")
-    elif data == "paid":
-        if d.get("entry_fee", 0) == 0:
-            d["entry_fee"] = 1000
-        d["type"] = "paid"
-        try:
-            await query.message.edit_text(_panel(d), parse_mode="HTML", reply_markup=_setup_keyboard())
-        except BadRequest as exc:
-            if "Message is not modified" not in str(exc):
-                raise
-        await query.answer("Paid tournament selected")
+        await _ask(query, context, "gamechat", "🎮 Send the group ID where tournament Bingo rooms are created (e.g. <code>-100123...</code>).")
     elif data == "preview":
         await query.message.reply_text(_announcement_text(d, preview=True), parse_mode="HTML")
         await query.answer()
     elif data == "create":
         if not d.get("channel_id"):
-            await query.answer("Set a channel first.", show_alert=True)
+            await query.answer("Set the channel first.", show_alert=True)
             return
         if not d.get("game_chat_id"):
-            await query.answer("Set the tournament game group first.", show_alert=True)
+            await query.answer("Set the game group first.", show_alert=True)
             return
+        if int(d.get("max_players", 0)) < 2:
+            await query.answer("Player count must be at least 2.", show_alert=True)
+            return
+        # Tournaments are intentionally automatic. No scheduled start/deadline
+        # controls are needed: reaching max_players starts the tournament.
+        d["auto_start"] = True
+        d["min_players"] = 2
         tid = await db.create_tournament(d)
-        await query.message.edit_text(f"✅ <b>Tournament created!</b>\n\n🆔 <code>{tid}</code>\n\nUse /tournament_manage {tid} to manage it.", parse_mode="HTML")
+        await query.message.edit_text(
+            f"✅ <b>Tournament created!</b>\n\n🆔 <code>{tid}</code>\n\n"
+            f"Players: <b>{d['max_players']}</b>\n"
+            "The tournament will start automatically when full.\n"
+            "All matches in each round will start together.",
+            parse_mode="HTML")
         await publish_tournament(context, tid)
         context.user_data.pop("tournament_draft", None)
         context.user_data.pop("tournament_input", None)
@@ -219,59 +188,55 @@ async def handle_tournament_input(update: Update, context: ContextTypes.DEFAULT_
     field = context.user_data.get("tournament_input")
     if not d or not field or not update.message or not update.message.text:
         return False
+
     value = update.message.text.strip()
     ok = True
     err = None
     if field == "name":
         d["name"] = value[:100]
-    elif field in ("description", "rules"):
-        d[field] = "" if value == "-" else value[:3000]
     elif field == "players":
-        p = value.split()
         try:
-            maxp = int(p[0]); minp = int(p[1]) if len(p) > 1 else 2
-            if maxp < 2 or minp < 2 or minp > maxp:
+            maxp = int(value)
+            if maxp < 2 or maxp > 512:
                 raise ValueError
-            d["max_players"], d["min_players"] = maxp, minp
+            d["max_players"] = maxp
         except ValueError:
-            ok = False; err = "Use max or max min, e.g. <code>37</code> or <code>37 9</code>."
-    elif field == "gamechat":
-        if not value.startswith("-100") and not value.startswith("@"):
-            ok = False; err = "Use the numeric group ID like <code>-100123...</code> or a public @username."
-        else:
-            d["game_chat_id"] = value
+            ok = False
+            err = "Use a player count from <code>2</code> to <code>512</code>. Even numbers are recommended."
     elif field == "entry":
         try:
             n = int(value)
-            if n < 0: raise ValueError
-            d["entry_fee"] = n; d["type"] = "paid" if n else "free"
+            if n < 0:
+                raise ValueError
+            d["entry_fee"] = n
+            d["type"] = "paid" if n else "free"
         except ValueError:
-            ok = False; err = "Entry fee must be a non-negative number."
+            ok = False
+            err = "Entry fee must be a non-negative number."
     elif field == "prizes":
         try:
             vals = [int(x) for x in value.split()]
-            if len(vals) != 3 or any(x < 0 for x in vals): raise ValueError
+            if len(vals) != 3 or any(x < 0 for x in vals):
+                raise ValueError
             d["prize_1"], d["prize_2"], d["prize_3"] = vals
         except ValueError:
-            ok = False; err = "Send exactly three numbers, e.g. <code>100000 50000 25000</code>."
-    elif field in ("start", "deadline"):
-        if value == "-" and field == "deadline":
-            d["registration_deadline"] = None
+            ok = False
+            err = "Send exactly three numbers, e.g. <code>100000 50000 25000</code>."
+    elif field == "gamechat":
+        if not value.startswith("-100") and not value.startswith("@"):
+            ok = False
+            err = "Use the numeric group ID like <code>-100123...</code> or a public @username."
         else:
-            dt = _parse_dt(value)
-            if not dt:
-                ok = False; err = f"Invalid date/time. Use <code>YYYY-MM-DD HH:MM</code> in {TOURNAMENT_TZ}."
-            else:
-                d["start_at" if field == "start" else "registration_deadline"] = dt
+            d["game_chat_id"] = value
     elif field == "channel":
         d["channel_id"] = value
+
     context.user_data.pop("tournament_input", None)
     if not ok:
         await update.message.reply_text("❌ " + err, parse_mode="HTML")
         return True
     await update.message.reply_text(_panel(d), parse_mode="HTML", reply_markup=_setup_keyboard())
     return True
-
 
 def _announcement_text(t, preview=False):
     prizes = f"🥇 {_money(t.get('prize_1', 0))} 🪙\n🥈 {_money(t.get('prize_2', 0))} 🪙\n🥉 {_money(t.get('prize_3', 0))} 🪙"
@@ -451,6 +416,7 @@ async def start_tournament(context, tid):
 
     from game import start_game_countdown
     created = 0
+    countdown_jobs = []
     for match_no, (a, b) in enumerate(pairs, 1):
         if a is None and b is None:
             continue
@@ -474,7 +440,13 @@ async def start_tournament(context, tid):
         await db.join_room(room_id, b["telegram_id"])
         await db.attach_tournament_match_room(match_id, room_id)
         created += 1
-        asyncio.create_task(start_game_countdown(context, room_id, game_chat_id, p1, p2, room_msg.message_id))
+        # Do not start this match yet. Build every round-one room first so
+        # all matches can begin their countdown together.
+        countdown_jobs.append((room_id, game_chat_id, p1, p2, room_msg.message_id))
+
+    # All rooms now exist. Start every match countdown from the same event loop turn.
+    for job in countdown_jobs:
+        asyncio.create_task(start_game_countdown(context, *job))
 
     await announce_round(context, tid, 1)
     # If every match was a BYE (should only happen with one active player, already rejected), advance.
@@ -550,6 +522,7 @@ async def advance_tournament(context, tid, round_no):
 
     from game import start_game_countdown
     real_matches = 0
+    countdown_jobs = []
     for i in range(0, len(winners), 2):
         a = winners[i]
         b = winners[i + 1] if i + 1 < len(winners) else None
@@ -573,7 +546,12 @@ async def advance_tournament(context, tid, round_no):
         room_id = await db.create_room(game_chat_id, room_no, a, room_msg.message_id, tournament_match_id=match_id)
         await db.join_room(room_id, b)
         await db.attach_tournament_match_room(match_id, room_id)
-        asyncio.create_task(start_game_countdown(context, room_id, game_chat_id, p1, p2, room_msg.message_id))
+        # Queue the countdown until every match in this round has a room.
+        countdown_jobs.append((room_id, game_chat_id, p1, p2, room_msg.message_id))
+
+    # Start all matches in the round together after all rooms are ready.
+    for job in countdown_jobs:
+        asyncio.create_task(start_game_countdown(context, *job))
 
     await db.update_tournament(tid, current_round=next_round)
     await announce_round(context, tid, next_round)
