@@ -731,13 +731,38 @@ async def handle_tournament_card(update: Update, context: ContextTypes.DEFAULT_T
                 await q.answer('🚫 Number already called or turn changed.', show_alert=True)
                 return
             room = new_room
-            marker = room.get('marker_id')
-            await q.answer(f'📢 Called {n}!')
-            # Match the normal-game flow exactly: refresh BOTH private cards
-            # immediately after a call.  The caller's card must also refresh,
-            # even though only the opponent is the marker for this phase.
+
+            # IMPORTANT: a player calling a number must also get that number
+            # marked on their own card immediately. The previous tournament
+            # implementation only changed the opponent into the marker, so a
+            # number such as 20 could be called by the current player and then
+            # remain unmarked forever on that player's own card.
             caller = uid
             opponent = room['p1'] if caller == room['p2'] else room['p2']
+            caller_card = await db.get_tournament_card(room_id, caller)
+            if caller_card and n not in caller_card.get('marked_numbers', []):
+                caller_marked = caller_card.get('marked_numbers', []) + [n]
+                caller_lines = _lines(caller_card['numbers'], caller_marked)
+                claimed = await db.claim_tournament_mark(
+                    caller_card['id'], n, caller_lines
+                )
+                if claimed:
+                    caller_card['marked_numbers'] = list(dict.fromkeys(caller_marked))
+                    caller_card['completed_lines'] = caller_lines
+
+                    # If the caller completes BINGO with the called number,
+                    # finish the match immediately instead of waiting for the
+                    # opponent's marking phase.
+                    if caller_lines >= 5:
+                        await _finish_match(context, room_id, caller, 'bingo')
+                        await q.answer('🏆 BINGO!')
+                        return
+
+            await q.answer(f'📢 Called {n}!')
+            # Refresh both cards and the group panel immediately. The caller
+            # now visibly has the called number marked, while the opponent is
+            # still prompted to mark the same called number if it is on their
+            # card.
             await asyncio.gather(
                 _send_tournament_card(context, room_id, caller),
                 _send_tournament_card(context, room_id, opponent),
