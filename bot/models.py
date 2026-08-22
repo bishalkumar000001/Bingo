@@ -10,7 +10,23 @@ BINGO_LETTERS = ["B", "I", "N", "G", "O"]
 
 MAX_ROOMS_PER_CHAT = 3
 
-OWNER_ID = int(os.environ.get("OWNER_ID", "0"))
+# Support one or multiple owners.
+# Preferred Heroku Config Var:
+# OWNER_IDS=123456789,987654321
+# OWNER_ID is kept as a backwards-compatible fallback.
+_owner_ids_raw = os.environ.get("OWNER_IDS", "")
+OWNER_IDS = set()
+for _value in _owner_ids_raw.replace(";", ",").split(","):
+    _value = _value.strip()
+    if _value.isdigit():
+        OWNER_IDS.add(int(_value))
+
+_legacy_owner = os.environ.get("OWNER_ID", "").strip()
+if _legacy_owner.isdigit():
+    OWNER_IDS.add(int(_legacy_owner))
+
+# Backwards compatibility for code that still imports OWNER_ID.
+OWNER_ID = next(iter(OWNER_IDS), 0)
 
 _logger = os.environ.get("LOGGER_GROUP_ID", "")
 LOGGER_GROUP_ID = int(_logger) if _logger else None

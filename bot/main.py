@@ -28,7 +28,7 @@ from game import (
 from economy import award_winner, record_loss, process_forfeit
 from leaderboard import build_leaderboard_text, build_leaderboard_keyboard
 from utils import display_name_from_db, display_name
-from models import LINES_TO_WIN, WIN_COINS, FORFEIT_COST, CANCEL_FREE_THRESHOLD, OWNER_ID, LOGGER_GROUP_ID, SUPPORT_CHANNEL
+from models import LINES_TO_WIN, WIN_COINS, FORFEIT_COST, CANCEL_FREE_THRESHOLD, OWNER_ID, OWNER_IDS, LOGGER_GROUP_ID, SUPPORT_CHANNEL
 from tournament import (
     cmd_tournament_create, cmd_tournament_manage, cmd_tournament_dq, cmd_tournament_start,
     cmd_tournament_winner, tournament_setup_callback, tournament_join_callback,
@@ -378,7 +378,7 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
-    if not OWNER_ID or user.id != OWNER_ID:
+    if not OWNER_IDS or user.id not in OWNER_IDS:
         await update.message.reply_text("❌ This command is for the bot owner only.")
         return
 
@@ -460,7 +460,7 @@ async def cmd_give(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Amount must be greater than 0!")
         return
     
-    if user.id != OWNER_ID and sender["coins"] < amount:
+    if user.id not in OWNER_IDS and sender["coins"] < amount:
         await update.message.reply_text(
             f"❌ You don't have enough coins!\n"
             f"You have: 💰 <b>{sender['coins']:,}</b>\n"
@@ -494,7 +494,7 @@ async def cmd_give(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     # Transfer coins
-    if user.id == OWNER_ID:
+    if user.id in OWNER_IDS:
         success = await db.add_coins(
             recipient["telegram_id"],
             amount

@@ -11,7 +11,7 @@ from telegram.ext import ContextTypes
 from telegram.error import BadRequest, Forbidden
 
 import database as db
-from models import OWNER_ID
+from models import OWNER_IDS
 
 TOURNAMENT_CHANNEL_ID = os.environ.get("TOURNAMENT_CHANNEL_ID", "")
 TOURNAMENT_TZ = "Asia/Kolkata"  # Fixed to IST (India Standard Time, UTC+05:30)
@@ -19,7 +19,7 @@ TOURNAMENT_GAME_CHAT_ID = os.environ.get("TOURNAMENT_GAME_CHAT_ID", "")
 
 
 def _owner(user_id: int) -> bool:
-    return bool(OWNER_ID) and user_id == OWNER_ID
+    return bool(OWNER_IDS) and user_id in OWNER_IDS
 
 
 def _tz():
