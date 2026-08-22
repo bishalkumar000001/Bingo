@@ -649,7 +649,21 @@ async def tournament_scheduler(application: Application):
             from tournament import start_tournament
             now = datetime.now(timezone.utc)
             for t in await db.get_open_tournaments():
-                if t.get("status") in ("registration", "scheduled") and t.get("start_at") and now >= t["start_at"]:
+                start_at = t.get("start_at")
+                # MongoDB/JSON-backed records may return start_at as an ISO string.
+                # Normalize it to an aware UTC datetime before comparing with `now`.
+                if isinstance(start_at, str):
+                    try:
+                        start_at = start_at.strip()
+                        if start_at.endswith("Z"):
+                            start_at = start_at[:-1] + "+00:00"
+                        start_at = datetime.fromisoformat(start_at)
+                    except (TypeError, ValueError):
+                        logger.warning("Invalid tournament start_at for %s: %r", t.get("id"), t.get("start_at"))
+                        continue
+                if isinstance(start_at, datetime) and start_at.tzinfo is None:
+                    start_at = start_at.replace(tzinfo=timezone.utc)
+                if t.get("status") in ("registration", "scheduled") and start_at and now >= start_at:
                     if await db.tournament_player_count(t["id"]) >= int(t.get("min_players", 2)):
                         await start_tournament(application, t["id"])
                     else:

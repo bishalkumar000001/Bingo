@@ -14,7 +14,7 @@ import database as db
 from models import OWNER_ID
 
 TOURNAMENT_CHANNEL_ID = os.environ.get("TOURNAMENT_CHANNEL_ID", "")
-TOURNAMENT_TZ = os.environ.get("TOURNAMENT_TIMEZONE", "Asia/Kolkata")
+TOURNAMENT_TZ = "Asia/Kolkata"  # Fixed to IST (India Standard Time, UTC+05:30)
 TOURNAMENT_GAME_CHAT_ID = os.environ.get("TOURNAMENT_GAME_CHAT_ID", "")
 
 
@@ -156,22 +156,38 @@ async def tournament_setup_callback(update: Update, context: ContextTypes.DEFAUL
         await _ask(query, context, "gamechat", "🎮 Send the group ID where tournament Bingo rooms should be created (e.g. <code>-100123...</code>). The bot must be admin there.")
     elif data == "shuffle":
         d["shuffle_players"] = not d.get("shuffle_players", True)
-        await query.message.edit_text(_panel(d), parse_mode="HTML", reply_markup=_setup_keyboard())
+        try:
+            await query.message.edit_text(_panel(d), parse_mode="HTML", reply_markup=_setup_keyboard())
+        except BadRequest as exc:
+            if "Message is not modified" not in str(exc):
+                raise
         await query.answer("Shuffle updated")
     elif data == "auto":
         d["auto_start"] = not d.get("auto_start", True)
-        await query.message.edit_text(_panel(d), parse_mode="HTML", reply_markup=_setup_keyboard())
+        try:
+            await query.message.edit_text(_panel(d), parse_mode="HTML", reply_markup=_setup_keyboard())
+        except BadRequest as exc:
+            if "Message is not modified" not in str(exc):
+                raise
         await query.answer("Auto start updated")
     elif data == "free":
         d["entry_fee"] = 0
         d["type"] = "free"
-        await query.message.edit_text(_panel(d), parse_mode="HTML", reply_markup=_setup_keyboard())
+        try:
+            await query.message.edit_text(_panel(d), parse_mode="HTML", reply_markup=_setup_keyboard())
+        except BadRequest as exc:
+            if "Message is not modified" not in str(exc):
+                raise
         await query.answer("Free tournament selected")
     elif data == "paid":
         if d.get("entry_fee", 0) == 0:
             d["entry_fee"] = 1000
         d["type"] = "paid"
-        await query.message.edit_text(_panel(d), parse_mode="HTML", reply_markup=_setup_keyboard())
+        try:
+            await query.message.edit_text(_panel(d), parse_mode="HTML", reply_markup=_setup_keyboard())
+        except BadRequest as exc:
+            if "Message is not modified" not in str(exc):
+                raise
         await query.answer("Paid tournament selected")
     elif data == "preview":
         await query.message.reply_text(_announcement_text(d, preview=True), parse_mode="HTML")
