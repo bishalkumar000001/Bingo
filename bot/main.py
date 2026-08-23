@@ -672,7 +672,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_leaderboard_callback(update, context)
     elif data == "start_help":
         user = query.from_user
-        text = f"""❓ <b>VELOCITY BINGO — HOW TO PLAY</b>\n\n🎮 <b>1. CREATE A MATCH</b>\nUse /bingo in a group to create a room, then let another player join using the Join button.\n\n🎴 <b>2. GET YOUR CARD</b>\nBoth players receive a private 5×5 Bingo card containing numbers from 1 to 25.\n\n🔢 <b>3. PLAY YOUR TURN</b>\nPlayers take turns calling numbers. Mark available called numbers on your private card using the buttons.\n\n🏆 <b>4. WIN THE MATCH</b>\nComplete 5 horizontal, vertical, or diagonal Bingo lines before your opponent to win.\n\n💰 <b>5. EARN REWARDS</b>\nA match victory rewards 500 🪙 coins, and your game statistics are updated automatically.\n\n📋 <b>MAIN COMMANDS</b>\n🎮 /bingo — Create a match\n👤 /profile — View your stats\n🏆 /leaderboard — Top players\n🎁 /give — Transfer coins\n❌ /cancel — Cancel/forfeit a game\n🛑 /stopbingo — Admin room control\n\n💡 <b>TIP:</b> Start the bot privately with /start before playing so your private card can be delivered to you."""
+        # Use exactly the same dynamic help text as the /help command.
+        text = await _build_help_text(user)
         try:
             await query.message.edit_text(text, parse_mode="HTML", reply_markup=await _build_start_keyboard(context), disable_web_page_preview=True)
         except BadRequest:
