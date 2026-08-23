@@ -1,7 +1,7 @@
 import os
 import asyncio
 import logging
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -48,26 +48,61 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await db.create_user(user.id, user.username, user.first_name)
 
     name = user.first_name or user.username or "Player"
+    bot_username = context.bot.username
+    start_keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                "📢 Support Channel",
+                url=SUPPORT_CHANNEL if SUPPORT_CHANNEL else "https://t.me/",
+            ),
+            InlineKeyboardButton(
+                "➕ Add Me",
+                url=f"https://t.me/{bot_username}?startgroup=true",
+            ),
+        ],
+        [InlineKeyboardButton("📖 Help / Commands", callback_data="help_menu")],
+    ])
     await update.message.reply_text(
-        f"🎮 <b>Welcome to Velocity Bingo, {name}!</b>\n\n"
-        "This is a turn-based Bingo game where YOU call the numbers!\n\n"
-        "<b>How to play:</b>\n"
-        "1️⃣ Add me to a group chat\n"
-        "2️⃣ Use /bingo to create a room\n"
-        "3️⃣ A second player joins your room\n"
-        "4️⃣ You each get a private 5×5 card (1–25)\n"
-        "5️⃣ Take turns calling numbers\n"
-        f"6️⃣ First to complete <b>{LINES_TO_WIN} lines</b> wins!\n\n"
-        "<b>Commands:</b>\n"
-        "/bingo — Create a new match (in a group)\n"
-        "/cancel — Forfeit your current game\n"
-        "/profile — View your stats\n"
-        "/leaderboard — See top players\n"
-        "/give — Transfer coins to another player\n"
-        "/stopbingo — Cancel all rooms (admins only)\n\n"
-        "✅ You're registered! Go add me to a group and start playing.",
+        f"🎮 𝗪𝗲𝗹𝗰𝗼𝗺𝗲 {name} 🎉\n\n"
+        "𝗥𝗲𝗮𝗱𝘆 𝘁𝗼 𝗽𝗹𝗮𝘆 𝗕𝗶𝗻𝗴𝗼 𝘄𝗶𝘁𝗵 𝘆𝗼𝘂𝗿 𝗳𝗿𝗶𝗲𝗻𝗱𝘀 𝗮𝗻𝗱 𝗼𝘁𝗵𝗲𝗿 𝗽𝗹𝗮𝘆𝗲𝗿𝘀? 𝗜𝘁'𝘀 𝗲𝗮𝘀𝘆, 𝗳𝘂𝗻 & 𝗲𝘅𝗰𝗶𝘁𝗶𝗻𝗴! 🔥\n\n"
+        "╭─❖ 🎯 𝗛𝗼𝘄 𝘁𝗼 𝗣𝗹𝗮𝘆? ❖─╮\n"
+        "🔢 𝗦𝘁𝗮𝗿𝘁 𝗮 𝟭𝘃𝟭 𝗴𝗮𝗺𝗲 𝗮𝗻𝗱 𝗰𝗵𝗮𝗹𝗹𝗲𝗻𝗴𝗲 𝗮𝗻𝗼𝘁𝗵𝗲𝗿 𝗽𝗹𝗮𝘆𝗲𝗿.\n"
+        "🎲 𝗕𝗼𝘁𝗵 𝗽𝗹𝗮𝘆𝗲𝗿𝘀 𝗴𝗲𝘁 𝗮 𝟱×𝟱 𝗕𝗶𝗻𝗴𝗼 𝗰𝗮𝗿𝗱 𝘄𝗶𝘁𝗵 𝗻𝘂𝗺𝗯𝗲𝗿𝘀 𝟭–𝟮𝟱.\n"
+        "👆 𝗧𝗮𝗸𝗲 𝘁𝘂𝗿𝗻𝘀 𝗰𝗵𝗼𝗼𝘀𝗶𝗻𝗴 𝗻𝘂𝗺𝗯𝗲𝗿𝘀.\n"
+        "✅ 𝗧𝗵𝗲 𝗰𝗵𝗼𝘀𝗲𝗻 𝗻𝘂𝗺𝗯𝗲𝗿 𝗶𝘀 𝗺𝗮𝗿𝗸𝗲𝗱 𝗼𝗻 𝗯𝗼𝘁𝗵 𝗰𝗮𝗿𝗱𝘀.\n"
+        "🏆 𝗖𝗼𝗺𝗽𝗹𝗲𝘁𝗲 𝟱 𝗹𝗶𝗻𝗲𝘀 — 𝗥𝗼𝘄𝘀, 𝗖𝗼𝗹𝘂𝗺𝗻𝘀 𝗼𝗿 𝗗𝗶𝗮𝗴𝗼𝗻𝗮𝗹𝘀 — 𝘁𝗼 𝗰𝗼𝗺𝗽𝗹𝗲𝘁𝗲 𝗕𝗜𝗡𝗚𝗢. 𝗧𝗵𝗲 𝗳𝗶𝗿𝘀𝘁 𝗽𝗹𝗮𝘆𝗲𝗿 𝘁𝗼 𝗰𝗼𝗺𝗽𝗹𝗲𝘁𝗲 𝗶𝘁 𝘄𝗶𝗻𝘀! 🎊\n\n"
+        "╰─❖ 💰 𝗣𝗹𝗮𝘆 & 𝗘𝗮𝗿𝗻 ❖─╯\n"
+        "🏅 𝗪𝗶𝗻 𝗺𝗮𝘁𝗰𝗵𝗲𝘀 𝗮𝗻𝗱 𝗲𝗮𝗿𝗻 𝗕𝗶𝗻𝗴𝗼 𝗖𝗼𝗶𝗻𝘀\n"
+        "📊 𝗖𝗵𝗲𝗰𝗸 𝘆𝗼𝘂𝗿 𝗦𝘁𝗮𝘁𝘀 & 𝗪𝗶𝗻𝘀\n"
+        "🥇 𝗖𝗹𝗶𝗺𝗯 𝘁𝗵𝗲 𝗟𝗲𝗮𝗱𝗲𝗿𝗯𝗼𝗮𝗿𝗱\n"
+        "🏆 𝗝𝗼𝗶𝗻 𝗧𝗼𝘂𝗿𝗻𝗮𝗺𝗲𝗻𝘁𝘀 & 𝗰𝗼𝗺𝗽𝗲𝘁𝗲 𝗳𝗼𝗿 𝗿𝗲𝘄𝗮𝗿𝗱𝘀!\n\n"
+        "✨ 𝗡𝗼 𝗰𝗼𝗺𝗽𝗹𝗶𝗰𝗮𝘁𝗲𝗱 𝗿𝘂𝗹𝗲𝘀 — 𝗷𝘂𝘀𝘁 𝗽𝗹𝗮𝘆, 𝗰𝗼𝗺𝗽𝗹𝗲𝘁𝗲 𝘆𝗼𝘂𝗿 𝗕𝗜𝗡𝗚𝗢 & 𝗵𝗮𝘃𝗲 𝗳𝘂𝗻! ❤️\n"
+        "👇 𝗖𝗵𝗼𝗼𝘀𝗲 𝗮𝗻 𝗼𝗽𝘁𝗶𝗼𝗻 𝗯𝗲𝗹𝗼𝘄 𝗮𝗻𝗱 𝘀𝘁𝗮𝗿𝘁 𝗽𝗹𝗮𝘆𝗶𝗻𝗴! 🎮\n"
+        "👑 𝗣𝗹𝗮𝘆 • 𝗪𝗶𝗻 • 𝗕𝗲𝗰𝗼𝗺𝗲 𝘁𝗵𝗲 𝗕𝗶𝗻𝗴𝗼 𝗖𝗵𝗮𝗺𝗽𝗶𝗼𝗻! 🏆",
         parse_mode="HTML",
+        reply_markup=start_keyboard,
     )
+
+
+HELP_TEXT = (
+    "🎮 <b>Velocity Bingo — Help & Commands</b>\n\n"
+    "🎯 <b>Game</b>\n"
+    "/bingo — Create a 1v1 Bingo match in a group\n"
+    "/cancel — Cancel or forfeit your current match\n\n"
+    "💰 <b>Account</b>\n"
+    "/profile — View your stats and coin balance\n"
+    "/leaderboard — View the top players\n"
+    "/give @username amount — Transfer Bingo Coins\n\n"
+    "🏆 <b>Tournaments</b>\n"
+    "/tournament — View open tournaments\n"
+    "/jointournament ID — Join a tournament\n"
+    "/tournamentstatus ID — View bracket progress\n\n"
+    "Start the bot in a private chat before playing so your Bingo card can be delivered."
+)
+
+
+async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(HELP_TEXT, parse_mode="HTML")
 
 
 async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -510,7 +545,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
 
-    if data.startswith("tj:"):
+    if data == "help_menu":
+        await query.answer()
+        await query.message.reply_text(HELP_TEXT, parse_mode="HTML")
+    elif data.startswith("tj:"):
         await join_callback(update, context)
     elif data.startswith("ts:"):
         tid = data.split(":", 1)[1]
@@ -568,6 +606,7 @@ def main():
     )
 
     app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("bingo", cmd_bingo))
     app.add_handler(CommandHandler("cancel", cmd_cancel))
     app.add_handler(CommandHandler("profile", cmd_profile))
