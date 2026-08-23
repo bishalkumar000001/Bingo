@@ -399,28 +399,43 @@ async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # Broadcast to every registered private user AND every registered group.
     user_ids = await db.get_all_user_ids()
+    group_ids = await db.get_all_group_ids()
+    target_ids = list(set(user_ids) | set(group_ids))
+
     sent = failed = 0
+    sent_users = sent_groups = 0
 
     status_msg = await update.message.reply_text(
-        f"📡 Broadcasting to <b>{len(user_ids)}</b> users...", parse_mode="HTML"
+        f"📡 Broadcasting to <b>{len(user_ids)}</b> users and "
+        f"<b>{len(group_ids)}</b> groups...", parse_mode="HTML"
     )
 
-    for uid in user_ids:
+    group_id_set = set(group_ids)
+
+    for chat_id in target_ids:
         try:
             if source:
-                await source.copy(chat_id=uid)
+                await source.copy(chat_id=chat_id)
             else:
                 await context.bot.send_message(
-                    chat_id=uid,
+                    chat_id=chat_id,
                     text=" ".join(context.args),
                     parse_mode="HTML",
                 )
+
             sent += 1
+            if chat_id in group_id_set:
+                sent_groups += 1
+            else:
+                sent_users += 1
+
         except (Forbidden, BadRequest):
             failed += 1
         except Exception:
             failed += 1
+
         await asyncio.sleep(0.05)
 
     try:
@@ -428,7 +443,9 @@ async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"📡 <b>Broadcast Complete!</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"📨 Sent: <b>{sent}</b>\n"
+            f"👤 Users reached: <b>{sent_users}</b>\n"
+            f"👥 Groups reached: <b>{sent_groups}</b>\n"
+            f"📨 Total sent: <b>{sent}</b>\n"
             f"❌ Failed: <b>{failed}</b>\n\n"
             f"━━━━━━━━━━━━━━━━━━━━",
             parse_mode="HTML",
