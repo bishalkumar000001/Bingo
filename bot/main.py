@@ -1,7 +1,7 @@
 import os
 import asyncio
 import logging
-from telegram import Update, InputMediaPhoto
+from telegram import Update
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -10,7 +10,11 @@ from telegram.ext import (
     ContextTypes,
 )
 from telegram.error import BadRequest, Forbidden
-from webserver import start_webserver
+try:
+    from webserver import start_webserver
+except ImportError:
+    def start_webserver():
+        return None
 
 import database as db
 from rooms import cmd_bingo, handle_join_callback, handle_cancel_room_callback, cmd_stopbingo
@@ -24,10 +28,13 @@ from game import (
     _log,
 )
 from economy import award_winner, record_loss, process_forfeit
-from leaderboard import build_leaderboard_text, build_leaderboard_keyboard, build_leaderboard_image
-from profile import build_profile_image, build_profile_text
+from leaderboard import build_leaderboard_text, build_leaderboard_keyboard
 from utils import display_name_from_db, display_name
 from models import LINES_TO_WIN, WIN_COINS, FORFEIT_COST, CANCEL_FREE_THRESHOLD, OWNER_ID, LOGGER_GROUP_ID, SUPPORT_CHANNEL
+from tournament import (
+    cmd_tournament, cmd_create, cmd_join, cmd_leave, cmd_status, join_callback,
+    start_tournament, recover_active_tournaments,
+)
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -72,12 +79,27 @@ async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    image = await build_profile_image(player)
-    text = build_profile_text(player)
+    name = display_name_from_db(player)
+    games = player["games_played"]
+    wins = player["wins"]
+    losses = player["losses"]
+    win_rate = (wins / games * 100) if games > 0 else 0.0
+    streak = player["current_streak"]
+    longest = player["longest_streak"]
+    coins = player["coins"]
 
-    await update.message.reply_photo(
-        photo=image,
-        caption=text,
+    await update.message.reply_text(
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"👤 <b>Profile — {name}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"💰 Coins: <b>{coins:,}</b>\n"
+        f"🎮 Games Played: <b>{games}</b>\n"
+        f"🏆 Wins: <b>{wins}</b>\n"
+        f"😔 Losses: <b>{losses}</b>\n"
+        f"📈 Win Rate: <b>{win_rate:.1f}%</b>\n"
+        f"🔥 Current Streak: <b>{streak}</b>\n"
+        f"⭐ Longest Streak: <b>{longest}</b>\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━",
         parse_mode="HTML",
     )
 
@@ -92,10 +114,8 @@ async def cmd_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_title = chat.title if is_group else ""
     text = await build_leaderboard_text(scope, time_filter, chat_id, chat_title)
     keyboard = build_leaderboard_keyboard(scope, time_filter, chat_id)
-    image = await build_leaderboard_image(scope, time_filter, chat_id, chat_title)
-    await update.message.reply_photo(
-        photo=image,
-        caption=text,
+    await update.message.reply_text(
+        text,
         parse_mode="HTML",
         reply_markup=keyboard,
     )
@@ -130,13 +150,9 @@ async def handle_leaderboard_callback(update: Update, context: ContextTypes.DEFA
 
     text = await build_leaderboard_text(scope, time_filter, chat_id, chat_title)
     keyboard = build_leaderboard_keyboard(scope, time_filter, chat_id)
-    image = await build_leaderboard_image(scope, time_filter, chat_id, chat_title)
 
     try:
-        await query.edit_message_media(
-            media=InputMediaPhoto(media=image, caption=text, parse_mode="HTML"),
-            reply_markup=keyboard,
-        )
+        await query.edit_message_text(text=text, reply_markup=keyboard, parse_mode="HTML")
     except BadRequest:
         pass
     await query.answer()
@@ -196,6 +212,9 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(called) <= CANCEL_FREE_THRESHOLD:
         # ── Free cancel (1–5 numbers called) ──────────────────────────────
         await db.cancel_room(room["id"])
+        if room.get("tournament_id") and room.get("tournament_match_id"):
+            from tournament import record_match_result
+            await record_match_result(context, room, opponent_id, user.id)
         for mid_key in ("live_message_id", "last_call_message_id", "group_panel_message_id"):
             mid = room.get(mid_key)
             if mid:
@@ -235,6 +254,9 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         await db.cancel_room(room["id"])
+        if room.get("tournament_id") and room.get("tournament_match_id"):
+            from tournament import record_match_result
+            await record_match_result(context, room, opponent_id, user.id)
         for mid_key in ("live_message_id", "last_call_message_id", "group_panel_message_id"):
             mid = room.get(mid_key)
             if mid:
@@ -488,7 +510,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
 
-    if data.startswith("join:"):
+    if data.startswith("tj:"):
+        await join_callback(update, context)
+    elif data.startswith("ts:"):
+        tid = data.split(":", 1)[1]
+        t = await db.get_tournament(tid)
+        await query.answer()
+        if t:
+            from tournament import tournament_text
+            await query.message.reply_text(await tournament_text(t), parse_mode="HTML")
+    elif data.startswith("join:"):
         await handle_join_callback(update, context)
     elif data.startswith("cancel_room:"):
         await handle_cancel_room_callback(update, context)
@@ -512,7 +543,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def post_init(application: Application):
     await db.init_db()
+    await recover_active_tournaments(application)
     logger.info("Database initialized.")
+
+
+async def _start_tournament_command(update, context):
+    if update.effective_user.id != OWNER_ID or not context.args:
+        await update.message.reply_text("Usage: /starttournament TOURNAMENT_ID (owner only)")
+        return
+    await start_tournament(context.args[0], context)
+    await update.message.reply_text("✅ Tournament started or is already in progress.")
 
 
 def main():
@@ -535,6 +575,12 @@ def main():
     app.add_handler(CommandHandler("stopbingo", cmd_stopbingo))
     app.add_handler(CommandHandler("broadcast", cmd_broadcast))
     app.add_handler(CommandHandler("give", cmd_give))
+    app.add_handler(CommandHandler("tournament", cmd_tournament))
+    app.add_handler(CommandHandler("createtournament", cmd_create))
+    app.add_handler(CommandHandler("jointournament", cmd_join))
+    app.add_handler(CommandHandler("leavetournament", cmd_leave))
+    app.add_handler(CommandHandler("tournamentstatus", cmd_status))
+    app.add_handler(CommandHandler("starttournament", _start_tournament_command))
     app.add_handler(ChatMemberHandler(handle_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
