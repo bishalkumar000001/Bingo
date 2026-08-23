@@ -1,5 +1,5 @@
 from io import BytesIO
-from PIL import Image, ImageDraw, ImageFont, ImageOps
+from PIL import Image, ImageDraw, ImageFont
 
 from database import get_user_rank
 
@@ -22,11 +22,22 @@ def _fit(text: str, limit: int = 22) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
+def _fit_font(draw, text: str, max_width: int, start_size: int, min_size: int, bold: bool = True):
+    """Return the largest font size that fits inside max_width."""
+    text = str(text or "")
+    for size in range(start_size, min_size - 1, -1):
+        font = _font(size, bold)
+        box = draw.textbbox((0, 0), text, font=font)
+        if (box[2] - box[0]) <= max_width:
+            return font
+    return _font(min_size, bold)
+
+
 def _rounded(draw, box, radius, fill=None, outline=None, width=1):
     draw.rounded_rectangle(box, radius=radius, fill=fill, outline=outline, width=width)
 
 
-async def build_profile_image(player: dict, avatar_bytes: bytes | None = None) -> BytesIO:
+async def build_profile_image(player: dict) -> BytesIO:
     """Create a rectangular neon profile card from live player data."""
     width, height = 1200, 820
     image = Image.new("RGB", (width, height), "#070814")
@@ -60,7 +71,6 @@ async def build_profile_image(player: dict, avatar_bytes: bytes | None = None) -
 
     username = player.get("username") or f"player_{player.get('telegram_id', '')}"
     username = "@" + str(username).lstrip("@")
-    username = _fit(username, 24)
     coins = int(player.get("coins", 0) or 0)
     games = int(player.get("games_played", 0) or 0)
     wins = int(player.get("wins", 0) or 0)
@@ -71,37 +81,17 @@ async def build_profile_image(player: dict, avatar_bytes: bytes | None = None) -
     rank = await get_user_rank(int(player.get("telegram_id", 0) or 0))
     rank_text = f"#{rank}" if rank else "UNRANKED"
 
-    # User profile photo inside the left circular avatar.
+    # Automatically resize long usernames so they never get cut off.
+    username_font = _fit_font(
+        draw, username, max_width=320, start_size=34, min_size=16, bold=True
+    )
+
+    # Avatar placeholder.
     avatar_box = (70, 220, 320, 470)
-    avatar_size = avatar_box[2] - avatar_box[0]
-    avatar_drawn = False
-
-    if avatar_bytes:
-        try:
-            avatar = Image.open(BytesIO(avatar_bytes)).convert("RGB")
-            # Center-crop the Telegram profile photo to a square.
-            avatar = ImageOps.fit(
-                avatar,
-                (avatar_size, avatar_size),
-                method=Image.Resampling.LANCZOS,
-                centering=(0.5, 0.5),
-            )
-            mask = Image.new("L", (avatar_size, avatar_size), 0)
-            mask_draw = ImageDraw.Draw(mask)
-            mask_draw.ellipse((0, 0, avatar_size - 1, avatar_size - 1), fill=255)
-            image.paste(avatar, (avatar_box[0], avatar_box[1]), mask)
-            avatar_drawn = True
-        except Exception:
-            avatar_drawn = False
-
-    # Fallback avatar when the user has no Telegram profile photo.
-    if not avatar_drawn:
-        draw.ellipse(avatar_box, fill="#101633")
-        draw.ellipse((145, 270, 245, 370), fill="#4c77df")
-        _rounded(draw, (105, 375, 285, 455), 75, fill="#493bb7")
-
-    # Neon border around the circular profile photo.
-    draw.ellipse(avatar_box, outline="#5a62ff", width=7)
+    draw.ellipse(avatar_box, fill="#101633", outline="#5a62ff", width=7)
+    # Simple person icon.
+    draw.ellipse((145, 270, 245, 370), fill="#4c77df")
+    _rounded(draw, (105, 375, 285, 455), 75, fill="#493bb7")
 
     # Identity panel.
     _rounded(draw, (355, 225, 735, 330), 20, fill="#111833", outline="#2b9eff", width=2)
@@ -110,12 +100,15 @@ async def build_profile_image(player: dict, avatar_bytes: bytes | None = None) -
     draw.text((560, 375), str(player.get("telegram_id", "-")), font=value_font, anchor="lm", fill="#e8edff")
     draw.line((365, 405, 720, 405), fill="#26305d", width=2)
     draw.text((365, 445), "ACCOUNT STATUS", font=label_font, anchor="lm", fill="#8997c8")
-    draw.text((565, 445), "ACTIVE PLAYER", font=value_font, anchor="lm", fill="#5de3a1")
+    status_font = _fit_font(draw, "ACTIVE PLAYER", max_width=150, start_size=28, min_size=16, bold=True)
+    draw.text((565, 445), "ACTIVE PLAYER", font=status_font, anchor="lm", fill="#5de3a1")
 
     # Coin balance panel.
     _rounded(draw, (770, 220, 1130, 390), 24, fill="#171326", outline="#d78c29", width=2)
     draw.text((950, 260), "COIN BALANCE", font=_font(23, True), anchor="mm", fill="#c5c9de")
-    draw.text((950, 335), f"${coins:,}", font=big_value_font, anchor="mm", fill="#ffc74d")
+    coin_text = f"${coins:,}"
+    coin_font = _fit_font(draw, coin_text, max_width=320, start_size=60, min_size=26, bold=True)
+    draw.text((950, 335), coin_text, font=coin_font, anchor="mm", fill="#ffc74d")
 
     # Rank panel.
     _rounded(draw, (770, 410, 1130, 555), 24, fill="#12152d", outline="#8b53f5", width=2)
