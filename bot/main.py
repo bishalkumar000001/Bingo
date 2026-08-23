@@ -1,7 +1,7 @@
 import os
 import asyncio
 import logging
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -38,31 +38,86 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+async def _send_help_message(update: Update, context: ContextTypes.DEFAULT_TYPE, *, via_callback=False):
+    user = update.effective_user
+    name = user.first_name or user.username or "Player"
+    text = f"""🎮 𝗪𝗲𝗹𝗰𝗼𝗺𝗲, ─ {name}
+
+🎯 𝗦𝘁𝗮𝗿𝘁 𝗮 𝗚𝗮𝗺𝗲
+
+🎮 Create or join a 1v1 match with another player.
+🤝 Once both players join, the game begins.
+🔢 Each player gets a 5×5 Bingo card with numbers 1–25.
+
+📩 Start the bot in private using /start to receive your card and game updates.
+
+🔄 𝗛𝗼𝘄 𝘁𝗵𝗲 𝗚𝗮𝗺𝗲 𝗪𝗼𝗿𝗸𝘀
+👆 Players take turns choosing numbers.
+✅ The selected number is marked on both Bingo cards.
+🧠 Complete your lines before your opponent!
+
+🏆 𝗛𝗼𝘄 𝘁𝗼 𝗪𝗶𝗻
+Complete 5 full lines to make BINGO:
+➖ Rows — Left to right
+⬇️ Columns — Top to bottom
+✖️ Diagonals — Across the card
+
+🎉 The first player to complete 5 lines wins the match! 👑🏆
+
+🥇 𝗟𝗲𝗮𝗱𝗲𝗿𝗯𝗼𝗮𝗿𝗱
+Compete with other players and fight for the #1 spot! 👑
+
+❌ 𝗖𝗮𝗻𝗰𝗲𝗹𝗹𝗶𝗻𝗴 & 𝗙𝗮𝗶𝗿 𝗣𝗹𝗮𝘆
+Use /cancel if you cannot continue the current match. 🤝
+⚠️ Play fairly and don't keep your opponent waiting!
+
+✨ 𝗤𝘂𝗶𝗰𝗸 𝗦𝘁𝗮𝗿𝘁
+1️⃣ Start the Bot → 2️⃣ Join a Match → 3️⃣ Play → 4️⃣ Complete BINGO → 5️⃣ WIN! 🏆"""
+    buttons = [[InlineKeyboardButton("📢 Support Channel", callback_data="support_channel")]]
+    markup = InlineKeyboardMarkup(buttons)
+    if via_callback:
+        await update.callback_query.message.reply_text(text, reply_markup=markup)
+    else:
+        await update.message.reply_text(text, reply_markup=markup)
+
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await db.create_user(user.id, user.username, user.first_name)
 
     name = user.first_name or user.username or "Player"
-    await update.message.reply_text(
-        f"🎮 <b>Welcome to Velocity Bingo, {name}!</b>\n\n"
-        "This is a turn-based Bingo game where YOU call the numbers!\n\n"
-        "<b>How to play:</b>\n"
-        "1️⃣ Add me to a group chat\n"
-        "2️⃣ Use /bingo to create a room\n"
-        "3️⃣ A second player joins your room\n"
-        "4️⃣ You each get a private 5×5 card (1–25)\n"
-        "5️⃣ Take turns calling numbers\n"
-        f"6️⃣ First to complete <b>{LINES_TO_WIN} lines</b> wins!\n\n"
-        "<b>Commands:</b>\n"
-        "/bingo — Create a new match (in a group)\n"
-        "/cancel — Forfeit your current game\n"
-        "/profile — View your stats\n"
-        "/leaderboard — See top players\n"
-        "/give — Transfer coins to another player\n"
-        "/stopbingo — Cancel all rooms (admins only)\n"
-        "✅ You're registered! Go add me to a group and start playing.",
-        parse_mode="HTML",
-    )
+    text = f"""🎮 𝗪𝗲𝗹𝗰𝗼𝗺𝗲 ─͢ {name} 🎉
+🎯 𝗛𝗼𝘄 𝘁𝗼 𝗣𝗹𝗮𝘆?
+● Start a 1v1 game and challenge another player.
+● Both players get a 5x5 Bingo card with numbers 1-25.
+● Take turns choosing numbers.
+● The chosen number is marked on both cards.
+● Complete 5 lines — Rows, Columns or Diagonals — to complete BINGO. The first player to complete it wins 🎊
+
+💰 𝗣𝗹𝗮𝘆 & 𝗘𝗮𝗿𝗻
+● 𝗪𝗶𝗻 𝗺𝗮𝘁𝗰𝗵𝗲𝘀 𝗮𝗻𝗱 𝗲𝗮𝗿𝗻 𝗕𝗶𝗻𝗴𝗼 𝗖𝗼𝗶𝗻𝘀
+● 𝗖𝗵𝗲𝗰𝗸 𝘆𝗼𝘂𝗿 𝗦𝘁𝗮𝘁𝘀 & 𝗪𝗶𝗻𝘀
+● 𝗖𝗹𝗶𝗺𝗯 𝘁𝗵𝗲 𝗟𝗲𝗮𝗱𝗲𝗿𝗯𝗼𝗮𝗿𝗱
+● 𝗝𝗼𝗶𝗻 𝗧𝗼𝘂𝗿𝗻𝗮𝗺𝗲𝗻𝘁𝘀 & 𝗰𝗼𝗺𝗽𝗲𝘁𝗲 𝗳𝗼𝗿 𝗿𝗲𝘄𝗮𝗿𝗱𝘀!
+
+✨ 𝗡𝗼 𝗰𝗼𝗺𝗽𝗹𝗶𝗰𝗮𝘁𝗲𝗱 𝗿𝘂𝗹𝗲𝘀 — 𝗷𝘂𝘀𝘁 𝗽𝗹𝗮𝘆, 𝗰𝗼𝗺𝗽𝗹𝗲𝘁𝗲 𝘆𝗼𝘂𝗿 𝗕𝗜𝗡𝗚𝗢 & 𝗵𝗮𝘃𝗲 𝗳𝘂𝗻! ❤️
+
+👇 Start playing with your friends. 🎮
+/bingo = to start the match.
+/leaderboard = rankings of the top ten users
+/profile = for your stats
+
+👑 𝗣𝗹𝗮𝘆 • 𝗪𝗶𝗻 • 𝗕𝗲𝗰𝗼𝗺𝗲 𝘁𝗵𝗲 𝗕𝗶𝗻𝗴𝗼 𝗖𝗵𝗮𝗺𝗽𝗶𝗼𝗻! 🏆"""
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📢 Support Channel", callback_data="support_channel"),
+         InlineKeyboardButton("➕ Add Me", callback_data="add_me")],
+        [InlineKeyboardButton("ℹ️ Detail Help", callback_data="detail_help")],
+    ])
+    await update.message.reply_text(text, reply_markup=keyboard)
+
+
+async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _send_help_message(update, context)
 
 
 async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -526,6 +581,20 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "tournament_join":
         await handle_tournament_join(update, context)
         return
+    if data == "detail_help":
+        await query.answer()
+        await _send_help_message(update, context, via_callback=True)
+        return
+    if data == "support_channel":
+        if SUPPORT_CHANNEL and SUPPORT_CHANNEL.startswith(("http://", "https://")):
+            await query.answer()
+            await query.message.reply_text("📢 Join our support channel:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📢 Open Support Channel", url=SUPPORT_CHANNEL)]]))
+        else:
+            await query.answer("Support channel is not configured yet.", show_alert=True)
+        return
+    if data == "add_me":
+        await query.answer("Add this bot to your group, then use /bingo to start a match.", show_alert=True)
+        return
 
     if data.startswith("join:"):
         await handle_join_callback(update, context)
@@ -567,6 +636,7 @@ def main():
     )
 
     app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("bingo", cmd_bingo))
     app.add_handler(CommandHandler("cancel", cmd_cancel))
     app.add_handler(CommandHandler("profile", cmd_profile))
