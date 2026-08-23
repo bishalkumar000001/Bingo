@@ -111,15 +111,15 @@ async def build_leaderboard_image(
     footer_font = _font(20, False)
 
     # Header.
-    draw.text(width // 2, 86, "LEADERBOARD", font=title_font, anchor="mm", fill="#f4f4f4")
-    draw.text(width // 2, 150, "TOP 10 PLAYERS", font=_font(22, True), anchor="mm", fill="#c9a0a8")
+    draw.text((width // 2, 86), "LEADERBOARD", font=title_font, anchor="mm", fill="#f4f4f4")
+    draw.text((width // 2, 150), "TOP 10 PLAYERS", font=_font(22, True), anchor="mm", fill="#c9a0a8")
 
     # Inner leaderboard panel.
     panel = (105, 180, width - 105, 740)
     draw.rounded_rectangle(panel, radius=28, fill="#210002", outline="#a52a3a", width=3)
 
     if not rows:
-        draw.text(width // 2, 460, "No leaderboard scores yet", font=_font(36, True), anchor="mm", fill="#f4f4f4")
+        draw.text((width // 2, 460), "No leaderboard scores yet", font=_font(36, True), anchor="mm", fill="#f4f4f4")
     else:
         max_coins = max(max(int(r.get("coins", 0) or 0) for r in rows), 1)
         medals = ["1", "2", "3"]
@@ -135,14 +135,14 @@ async def build_leaderboard_image(
             # Rank badge.
             badge_fill = "#b67600" if rank == 1 else ("#777777" if rank == 2 else ("#914817" if rank == 3 else "#3a0b12"))
             draw.ellipse((135, y + 3, 180, y + 48), fill=badge_fill, outline="#d7d7d7" if rank <= 3 else "#6f2430", width=2)
-            draw.text(157, y + 25, str(rank), font=rank_font, anchor="mm", fill="#ffffff")
+            draw.text((157, y + 25), str(rank), font=rank_font, anchor="mm", fill="#ffffff")
 
             # Simple circular avatar with the player's initial. This keeps the card
             # dynamic without requiring Telegram profile-photo downloads.
             first_name = str(row.get("first_name") or "Player")
             initial = first_name[:1].upper() if first_name else "P"
             draw.ellipse((195, y + 3, 240, y + 48), fill="#420912", outline="#b54252", width=2)
-            draw.text(217, y + 25, initial, font=_font(22, True), anchor="mm", fill="#ffffff")
+            draw.text((217, y + 25), initial, font=_font(22, True), anchor="mm", fill="#ffffff")
 
             display = first_name if row.get("first_name") else _display_name(row)
             display = _fit_name(display, 16)
@@ -163,14 +163,14 @@ async def build_leaderboard_image(
             # Coin value on/at the end of the bar.
             value_x = bar_end - 16 if bar_width >= 145 else bar_end + 14
             anchor = "rm" if bar_width >= 145 else "lm"
-            draw.text(value_x, y + 26, f"${coins:,}", font=coin_font, anchor=anchor, fill="#ffffff")
+            draw.text((value_x, y + 26), f"${coins:,}", font=coin_font, anchor=anchor, fill="#ffffff")
 
             y += row_h + row_gap
 
     # Footer line and text.
     draw.line((210, 775, width - 210, 775), fill="#8f2435", width=2)
     scope_text = chat_title if scope == "chat" and chat_title else ("GLOBAL" if scope == "global" else "CURRENT CHAT")
-    draw.text(width // 2, 810, f"{scope_text}  •  KEEP PLAYING AND CLIMB THE RANKINGS!", font=footer_font, anchor="mm", fill="#d0a2aa")
+    draw.text((width // 2, 810), f"{scope_text}  •  KEEP PLAYING AND CLIMB THE RANKINGS!", font=footer_font, anchor="mm", fill="#d0a2aa")
 
     output = BytesIO()
     output.name = "velocity_bingo_top10.png"
