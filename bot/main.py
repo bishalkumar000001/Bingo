@@ -25,6 +25,7 @@ from game import (
 )
 from economy import award_winner, record_loss, process_forfeit
 from leaderboard import build_leaderboard_text, build_leaderboard_keyboard, build_leaderboard_image
+from profile import build_profile_image, build_profile_text
 from utils import display_name_from_db, display_name
 from models import LINES_TO_WIN, WIN_COINS, FORFEIT_COST, CANCEL_FREE_THRESHOLD, OWNER_ID, LOGGER_GROUP_ID, SUPPORT_CHANNEL
 
@@ -71,27 +72,12 @@ async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    name = display_name_from_db(player)
-    games = player["games_played"]
-    wins = player["wins"]
-    losses = player["losses"]
-    win_rate = (wins / games * 100) if games > 0 else 0.0
-    streak = player["current_streak"]
-    longest = player["longest_streak"]
-    coins = player["coins"]
+    image = await build_profile_image(player)
+    text = build_profile_text(player)
 
-    await update.message.reply_text(
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"👤 <b>Profile — {name}</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"💰 Coins: <b>{coins:,}</b>\n"
-        f"🎮 Games Played: <b>{games}</b>\n"
-        f"🏆 Wins: <b>{wins}</b>\n"
-        f"😔 Losses: <b>{losses}</b>\n"
-        f"📈 Win Rate: <b>{win_rate:.1f}%</b>\n"
-        f"🔥 Current Streak: <b>{streak}</b>\n"
-        f"⭐ Longest Streak: <b>{longest}</b>\n\n"
-        f"━━━━━━━━━━━━━━━━━━━━",
+    await update.message.reply_photo(
+        photo=image,
+        caption=text,
         parse_mode="HTML",
     )
 
