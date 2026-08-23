@@ -3,4 +3,3 @@ motor==3.4.0
 pymongo==4.7.2
 fastapi
 uvicorn
-Pillow==10.4.0
