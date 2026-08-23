@@ -84,93 +84,99 @@ async def build_leaderboard_image(
     chat_id: int = 0,
     chat_title: str = "",
 ) -> BytesIO:
-    """Create a live Top-10 leaderboard card in the red/black bar-chart style."""
+    """Create a clean neon-style Top-10 leaderboard using usernames only."""
     rows = await get_leaderboard_filtered(scope, chat_id, time_filter, limit=10)
 
-    width, height = 1200, 860
-    image = Image.new("RGB", (width, height), "#eeeeee")
+    width, height = 1200, 900
+    image = Image.new("RGB", (width, height), "#080a18")
     draw = ImageDraw.Draw(image)
 
-    # Main rounded card mask/background.
-    card = (55, 25, width - 55, height - 25)
-    draw.rounded_rectangle(card, radius=70, fill="#130001")
+    # Premium dark navy card with a different neon theme.
+    outer = (38, 30, width - 38, height - 30)
+    draw.rounded_rectangle(outer, radius=48, fill="#0e1126", outline="#2d3566", width=3)
 
-    # Decorative red arcs, matching the reference style.
-    arc_width = 58
-    draw.arc((45, -120, 330, 165), 20, 165, fill="#a40020", width=arc_width)
-    draw.arc((900, -135, 1175, 145), 15, 170, fill="#a40020", width=arc_width)
-    draw.arc((-105, 300, 135, 610), 250, 95, fill="#8d001b", width=arc_width)
-    draw.arc((1000, 420, 1280, 700), 75, 255, fill="#8d001b", width=arc_width)
-    draw.arc((55, 770, 350, 1035), 195, 350, fill="#6f0015", width=arc_width)
+    # Decorative neon shapes.
+    draw.ellipse((-180, -180, 220, 220), outline="#4b2cff", width=42)
+    draw.ellipse((970, -150, 1370, 250), outline="#00b8ff", width=42)
+    draw.ellipse((-120, 680, 260, 1060), outline="#162b72", width=34)
+    draw.ellipse((980, 650, 1370, 1040), outline="#5422b8", width=34)
 
-    title_font = _font(70, True)
-    name_font = _font(24, True)
-    user_font = _font(18, False)
-    coin_font = _font(23, True)
-    rank_font = _font(25, True)
-    footer_font = _font(20, False)
+    title_font = _font(72, True)
+    sub_font = _font(22, True)
+    username_font = _font(25, True)
+    coin_font = _font(24, True)
+    rank_font = _font(26, True)
+    footer_font = _font(18, False)
 
     # Header.
-    draw.text((width // 2, 86), "LEADERBOARD", font=title_font, anchor="mm", fill="#f4f4f4")
-    draw.text((width // 2, 150), "TOP 10 PLAYERS", font=_font(22, True), anchor="mm", fill="#c9a0a8")
+    draw.text((width // 2, 92), "LEADERBOARD", font=title_font, anchor="mm", fill="#f5f7ff")
+    draw.text((width // 2, 145), "TOP 10 PLAYERS • LIVE RANKINGS", font=sub_font, anchor="mm", fill="#8fa5ff")
 
-    # Inner leaderboard panel.
-    panel = (105, 180, width - 105, 740)
-    draw.rounded_rectangle(panel, radius=28, fill="#210002", outline="#a52a3a", width=3)
+    # Header accent line.
+    draw.rounded_rectangle((410, 174, 790, 180), radius=3, fill="#5b7cff")
+
+    panel = (90, 205, width - 90, 770)
+    draw.rounded_rectangle(panel, radius=28, fill="#111633", outline="#303b74", width=2)
 
     if not rows:
-        draw.text((width // 2, 460), "No leaderboard scores yet", font=_font(36, True), anchor="mm", fill="#f4f4f4")
+        draw.text((width // 2, 490), "No leaderboard scores yet", font=_font(36, True), anchor="mm", fill="#f5f7ff")
     else:
         max_coins = max(max(int(r.get("coins", 0) or 0) for r in rows), 1)
-        medals = ["1", "2", "3"]
-        y = 208
-        row_h = 49
-        row_gap = 6
-        bar_x = 390
-        max_bar_width = 610
+        y = 228
+        row_h = 48
+        row_gap = 7
+        username_x = 205
+        bar_x = 430
+        max_bar_width = 590
 
         for rank, row in enumerate(rows[:10], start=1):
             coins = int(row.get("coins", 0) or 0)
 
+            # Row background.
+            draw.rounded_rectangle((115, y, width - 115, y + row_h), radius=12, fill="#171d3d")
+
             # Rank badge.
-            badge_fill = "#b67600" if rank == 1 else ("#777777" if rank == 2 else ("#914817" if rank == 3 else "#3a0b12"))
-            draw.ellipse((135, y + 3, 180, y + 48), fill=badge_fill, outline="#d7d7d7" if rank <= 3 else "#6f2430", width=2)
-            draw.text((157, y + 25), str(rank), font=rank_font, anchor="mm", fill="#ffffff")
+            if rank == 1:
+                badge_fill, badge_outline = "#f5b942", "#ffe49b"
+            elif rank == 2:
+                badge_fill, badge_outline = "#aeb9c9", "#edf3ff"
+            elif rank == 3:
+                badge_fill, badge_outline = "#b46b3e", "#ffd0ae"
+            else:
+                badge_fill, badge_outline = "#252d55", "#4a568b"
 
-            # Simple circular avatar with the player's initial. This keeps the card
-            # dynamic without requiring Telegram profile-photo downloads.
-            first_name = str(row.get("first_name") or "Player")
-            initial = first_name[:1].upper() if first_name else "P"
-            draw.ellipse((195, y + 3, 240, y + 48), fill="#420912", outline="#b54252", width=2)
-            draw.text((217, y + 25), initial, font=_font(22, True), anchor="mm", fill="#ffffff")
+            draw.ellipse((135, y + 4, 175, y + 44), fill=badge_fill, outline=badge_outline, width=2)
+            draw.text((155, y + 24), str(rank), font=rank_font, anchor="mm", fill="#101426" if rank <= 3 else "#eaf0ff")
 
-            display = first_name if row.get("first_name") else _display_name(row)
-            display = _fit_name(display, 16)
-            username = row.get("username")
-            handle = "@" + str(username).lstrip("@") if username else ""
-            handle = _fit_name(handle, 17)
+            # Username only — never display first/real name in the image.
+            raw_username = row.get("username")
+            if raw_username:
+                username = "@" + str(raw_username).lstrip("@")
+            else:
+                username = f"@player_{row.get('telegram_id', rank)}"
+            username = _fit_name(username, 20)
+            draw.text((username_x, y + 24), username, font=username_font, anchor="lm", fill="#f3f6ff")
 
-            draw.text((255, y + 10), display, font=name_font, fill="#f1eef0")
-            if handle:
-                draw.text((255, y + 34), handle, font=user_font, fill="#c18b94")
+            # Bar track.
+            draw.rounded_rectangle((bar_x, y + 7, bar_x + max_bar_width, y + 41), radius=9, fill="#0b0f24")
 
-            # Bar background and value bar.
-            draw.rounded_rectangle((bar_x, y + 4, bar_x + max_bar_width, y + 48), radius=8, fill="#34070d")
-            bar_width = max(72, int(max_bar_width * coins / max_coins))
-            bar_end = bar_x + min(max_bar_width, bar_width)
-            draw.rounded_rectangle((bar_x, y + 4, bar_end, y + 48), radius=8, fill="#df3657")
+            # Dynamic bar. The leader fills the full available width.
+            bar_width = max(64, int(max_bar_width * coins / max_coins))
+            bar_end = min(bar_x + max_bar_width, bar_x + bar_width)
+            draw.rounded_rectangle((bar_x, y + 7, bar_end, y + 41), radius=9, fill="#5169ff")
 
-            # Coin value on/at the end of the bar.
-            value_x = bar_end - 16 if bar_width >= 145 else bar_end + 14
-            anchor = "rm" if bar_width >= 145 else "lm"
-            draw.text((value_x, y + 26), f"${coins:,}", font=coin_font, anchor=anchor, fill="#ffffff")
+            # Coin value is always readable.
+            if bar_width >= 170:
+                draw.text((bar_end - 16, y + 24), f"${coins:,}", font=coin_font, anchor="rm", fill="#ffffff")
+            else:
+                draw.text((bar_end + 14, y + 24), f"${coins:,}", font=coin_font, anchor="lm", fill="#dce3ff")
 
             y += row_h + row_gap
 
-    # Footer line and text.
-    draw.line((210, 775, width - 210, 775), fill="#8f2435", width=2)
+    # Footer.
+    draw.line((210, 800, width - 210, 800), fill="#303b74", width=2)
     scope_text = chat_title if scope == "chat" and chat_title else ("GLOBAL" if scope == "global" else "CURRENT CHAT")
-    draw.text((width // 2, 810), f"{scope_text}  •  KEEP PLAYING AND CLIMB THE RANKINGS!", font=footer_font, anchor="mm", fill="#d0a2aa")
+    draw.text((width // 2, 842), f"{scope_text}  •  KEEP PLAYING. KEEP CLIMBING.", font=footer_font, anchor="mm", fill="#9eabdc")
 
     output = BytesIO()
     output.name = "velocity_bingo_top10.png"
