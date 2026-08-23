@@ -44,21 +44,20 @@ logger = logging.getLogger(__name__)
 
 async def _build_start_text(user):
     name = user.full_name or user.first_name or "Player"
-    return f"""🎮 𝗪𝗲𝗹𝗰𝗼𝗺𝗲 𝘁𝗼 𝘁𝗵𝗲 𝗨𝗹𝘁𝗶𝗺𝗮𝘁𝗲 𝗕𝗶𝗻𝗴𝗼 𝗚𝗮𝗺𝗲 𝗕𝗼𝘁! 🎉
-{name}
+    return f"""🎮 𝗪𝗲𝗹𝗰𝗼𝗺𝗲 {name} 🎉
+🎯 𝗛𝗼𝘄 𝘁𝗼 𝗣𝗹𝗮𝘆?
 
-𝗥𝗲𝗮𝗱𝘆 𝘁𝗼 𝗽𝗹𝗮𝘆 𝗕𝗶𝗻𝗴𝗼 𝘄𝗶𝘁𝗵 𝘆𝗼𝘂𝗿 𝗳𝗿𝗶𝗲𝗻𝗱𝘀 𝗮𝗻𝗱 𝗼𝘁𝗵𝗲𝗿 𝗽𝗹𝗮𝘆𝗲𝗿𝘀? 𝗜𝘁'𝘀 𝗲𝗮𝘀𝘆, 𝗳𝘂𝗻 & 𝗲𝘅𝗰𝗶𝘁𝗶𝗻𝗴! 🔥
+- Start a 1v1 game and challenge another player.
 
-╭─❖ 🎯 𝗛𝗼𝘄 𝘁𝗼 𝗣𝗹𝗮𝘆? ❖─╮
+* Both players get a 5x5 Bingo card with numbers 1-25.
 
-🔢 𝗦𝘁𝗮𝗿𝘁 𝗮 𝟭𝘃𝟭 𝗴𝗮𝗺𝗲 𝗮𝗻𝗱 𝗰𝗵𝗮𝗹𝗹𝗲𝗻𝗴𝗲 𝗮𝗻𝗼𝘁𝗵𝗲𝗿 𝗽𝗹𝗮𝘆𝗲𝗿.
-🎲 𝗕𝗼𝘁𝗵 𝗽𝗹𝗮𝘆𝗲𝗿𝘀 𝗴𝗲𝘁 𝗮 𝟱×𝟱 𝗕𝗶𝗻𝗴𝗼 𝗰𝗮𝗿𝗱 𝘄𝗶𝘁𝗵 𝗻𝘂𝗺𝗯𝗲𝗿𝘀 𝟭–𝟮𝟱.
-👆 𝗧𝗮𝗸𝗲 𝘁𝘂𝗿𝗻𝘀 𝗰𝗵𝗼𝗼𝘀𝗶𝗻𝗴 𝗻𝘂𝗺𝗯𝗲𝗿𝘀.
-✅ 𝗧𝗵𝗲 𝗰𝗵𝗼𝘀𝗲𝗻 𝗻𝘂𝗺𝗯𝗲𝗿 𝗶𝘀 𝗺𝗮𝗿𝗸𝗲𝗱 𝗼𝗻 𝗯𝗼𝘁𝗵 𝗰𝗮𝗿𝗱𝘀.
+- Take turns choosing numbers.
 
-🏆 𝗖𝗼𝗺𝗽𝗹𝗲𝘁𝗲 𝟱 𝗹𝗶𝗻𝗲𝘀 — 𝗥𝗼𝘄𝘀, 𝗖𝗼𝗹𝘂𝗺𝗻𝘀 𝗼𝗿 𝗗𝗶𝗮𝗴𝗼𝗻𝗮𝗹𝘀 — 𝘁𝗼 𝗰𝗼𝗺𝗽𝗹𝗲𝘁𝗲 𝗕𝗜𝗡𝗚𝗢. 𝗧𝗵𝗲 𝗳𝗶𝗿𝘀𝘁 𝗽𝗹𝗮𝘆𝗲𝗿 𝘁𝗼 𝗰𝗼𝗺𝗽𝗹𝗲𝘁𝗲 𝗶𝘁 𝘄𝗶𝗻𝘀! 🎊
+* The chosen number is marked on both cards.
 
-╰─❖ 💰 𝗣𝗹𝗮𝘆 & 𝗘𝗮𝗿𝗻 ❖─╯
+- Complete 5 lines — Rows, Columns or Diagonals — to complete BINGO. The first player to complete it wins 🎊
+
+💰 𝗣𝗹𝗮𝘆 & 𝗘𝗮𝗿𝗻
 
 🏅 𝗪𝗶𝗻 𝗺𝗮𝘁𝗰𝗵𝗲𝘀 𝗮𝗻𝗱 𝗲𝗮𝗿𝗻 𝗕𝗶𝗻𝗴𝗼 𝗖𝗼𝗶𝗻𝘀
 📊 𝗖𝗵𝗲𝗰𝗸 𝘆𝗼𝘂𝗿 𝗦𝘁𝗮𝘁𝘀 & 𝗪𝗶𝗻𝘀
@@ -71,8 +70,6 @@ async def _build_start_text(user):
 /bingo = to start the match.
 /leaderboard = rankings of the top ten users
 /profile = for your stats
-/give username amount = to give coins to your friend or cab be use for bet
-/cancel to stop the current match upto four chances it is free after four chances it cost 500 for cancel
 
 👑 𝗣𝗹𝗮𝘆 • 𝗪𝗶𝗻 • 𝗕𝗲𝗰𝗼𝗺𝗲 𝘁𝗵𝗲 𝗕𝗶𝗻𝗴𝗼 𝗖𝗵𝗮𝗺𝗽𝗶𝗼𝗻! 🏆""".strip()
 
@@ -90,97 +87,74 @@ async def _build_start_keyboard(context):
 async def _build_help_text(user):
     name = user.full_name or user.first_name or "Player"
     return f"""🎮 𝗪𝗲𝗹𝗰𝗼𝗺𝗲, {name}!
-𝗩𝗲𝗹𝗼𝗰𝗶𝘁𝘆 𝗕𝗶𝗻𝗴𝗼 𝗶𝘀 𝗮 𝗳𝘂𝗻 𝟭𝘃𝟭 𝗕𝗶𝗻𝗴𝗼 𝗴𝗮𝗺𝗲 𝘄𝗵𝗲𝗿𝗲 𝘆𝗼𝘂 𝗰𝗮𝗻 𝗰𝗵𝗮𝗹𝗹𝗲𝗻𝗴𝗲 𝗼𝘁𝗵𝗲𝗿 𝗽𝗹𝗮𝘆𝗲𝗿𝘀, 𝘄𝗶𝗻 𝗺𝗮𝘁𝗰𝗵𝗲𝘀, 𝗲𝗮𝗿𝗻 𝗰𝗼𝗶𝗻𝘀 𝗮𝗻𝗱 𝗯𝗲𝗰𝗼𝗺𝗲 𝗮 𝗰𝗵𝗮𝗺𝗽𝗶𝗼𝗻! 👑
 
 🎯 𝗦𝘁𝗮𝗿𝘁𝗶𝗻𝗴 𝗮 𝗚𝗮𝗺𝗲
 
-🎮 𝗖𝗿𝗲𝗮𝘁𝗲 𝗼𝗿 𝗷𝗼𝗶𝗻 𝗮 𝟭𝘃𝟭 𝗺𝗮𝘁𝗰𝗵 𝘄𝗶𝘁𝗵 𝗮𝗻𝗼𝘁𝗵𝗲𝗿 𝗽𝗹𝗮𝘆𝗲𝗿.
-🤝 𝗢𝗻𝗰𝗲 𝗯𝗼𝘁𝗵 𝗽𝗹𝗮𝘆𝗲𝗿𝘀 𝗷𝗼𝗶𝗻, 𝘁𝗵𝗲 𝗴𝗮𝗺𝗲 𝗯𝗲𝗴𝗶𝗻𝘀.
-🔢 𝗘𝗮𝗰𝗵 𝗽𝗹𝗮𝘆𝗲𝗿 𝗴𝗲𝘁𝘀 𝗮 𝟱×𝟱 𝗕𝗶𝗻𝗴𝗼 𝗰𝗮𝗿𝗱 𝘄𝗶𝘁𝗵 𝗻𝘂𝗺𝗯𝗲𝗿𝘀 𝟭–𝟮𝟱.
+🎮 Create or join a 1v1 match with another player.
+🤝 Once both players join, the game begins.
+🔢 Each player gets a 5×5 Bingo card with numbers 1–25.
 
-📩 𝗦𝘁𝗮𝗿𝘁 𝘁𝗵𝗲 𝗯𝗼𝘁 𝗶𝗻 𝗽𝗿𝗶𝘃𝗮𝘁𝗲 𝘂𝘀𝗶𝗻𝗴 /𝘀𝘁𝗮𝗿𝘁 𝘁𝗼 𝗿𝗲𝗰𝗲𝗶𝘃𝗲 𝘆𝗼𝘂𝗿 𝗰𝗮𝗿𝗱 𝗮𝗻𝗱 𝗴𝗮𝗺𝗲 𝘂𝗽𝗱𝗮𝘁𝗲𝘀!
+📩 Start the bot in private using /start to receive your card and game updates.
 
 🔄 𝗛𝗼𝘄 𝘁𝗵𝗲 𝗚𝗮𝗺𝗲 𝗪𝗼𝗿𝗸𝘀
 
-👆 𝗣𝗹𝗮𝘆𝗲𝗿𝘀 𝘁𝗮𝗸𝗲 𝘁𝘂𝗿𝗻𝘀 𝗰𝗵𝗼𝗼𝘀𝗶𝗻𝗴 𝗻𝘂𝗺𝗯𝗲𝗿𝘀.
-✅ 𝗖𝗮𝗹𝗹𝗲𝗱 𝗻𝘂𝗺𝗯𝗲𝗿𝘀 𝗮𝗿𝗲 𝗺𝗮𝗿𝗸𝗲𝗱 𝗼𝗻 𝘁𝗵𝗲 𝗕𝗶𝗻𝗴𝗼 𝗰𝗮𝗿𝗱𝘀.
-🧠 𝗖𝗼𝗺𝗽𝗹𝗲𝘁𝗲 𝘆𝗼𝘂𝗿 𝗹𝗶𝗻𝗲𝘀 𝗯𝗲𝗳𝗼𝗿𝗲 𝘆𝗼𝘂𝗿 𝗼𝗽𝗽𝗼𝗻𝗲𝗻𝘁 𝗮𝗻𝗱 𝗴𝗲𝘁 𝗰𝗹𝗼𝘀𝗲𝗿 𝘁𝗼 𝗕𝗜𝗡𝗚𝗢! 🔥
+👆 Players take turns choosing numbers.
+✅ The selected number is marked on both Bingo cards.
+🧠 Complete your lines before your opponent!
 
 🏆 𝗛𝗼𝘄 𝘁𝗼 𝗪𝗶𝗻
 
-𝗖𝗼𝗺𝗽𝗹𝗲𝘁𝗲 𝟱 𝗳𝘂𝗹𝗹 𝗹𝗶𝗻𝗲𝘀 𝗼𝗻 𝘆𝗼𝘂𝗿 𝗕𝗶𝗻𝗴𝗼 𝗰𝗮𝗿𝗱!
+Complete 5 full lines to make BINGO:
+➖ Rows — Left to right
+⬇️ Columns — Top to bottom
+✖️ Diagonals — Across the card
 
-➖ 𝗥𝗼𝘄𝘀 — 𝗟𝗲𝗳𝘁 𝘁𝗼 𝗿𝗶𝗴𝗵𝘁
-⬇️ 𝗖𝗼𝗹𝘂𝗺𝗻𝘀 — 𝗧𝗼𝗽 𝘁𝗼 𝗯𝗼𝘁𝘁𝗼𝗺
-✖️ 𝗗𝗶𝗮𝗴𝗼𝗻𝗮𝗹𝘀 — 𝗔𝗰𝗿𝗼𝘀𝘀 𝘁𝗵𝗲 𝗰𝗮𝗿𝗱
-
-🎉 𝗧𝗵𝗲 𝗳𝗶𝗿𝘀𝘁 𝗽𝗹𝗮𝘆𝗲𝗿 𝘁𝗼 𝗰𝗼𝗺𝗽𝗹𝗲𝘁𝗲 𝗕-𝗜-𝗡-𝗚-𝗢 𝘄𝗶𝗻𝘀 𝘁𝗵𝗲 𝗺𝗮𝘁𝗰𝗵! 👑🏆
+🎉 The first player to complete 5 lines wins the match! 👑🏆
 
 💰 𝗖𝗼𝗶𝗻𝘀 & 𝗪𝗶𝗻𝘀
 
-🏅 𝗪𝗶𝗻 𝗺𝗮𝘁𝗰𝗵𝗲𝘀 𝘁𝗼 𝗲𝗮𝗿𝗻 𝗕𝗶𝗻𝗴𝗼 𝗖𝗼𝗶𝗻𝘀 🪙
-📈 𝗬𝗼𝘂𝗿 𝘀𝘁𝗮𝘁𝘀 𝗮𝗻𝗱 𝗴𝗮𝗺𝗲 𝗿𝗲𝘀𝘂𝗹𝘁𝘀 𝗮𝗿𝗲 𝘀𝗮𝘃𝗲𝗱 𝗮𝘂𝘁𝗼𝗺𝗮𝘁𝗶𝗰𝗮𝗹𝗹𝘆.
-🔥 𝗞𝗲𝗲𝗽 𝘄𝗶𝗻𝗻𝗶𝗻𝗴 𝗮𝗻𝗱 𝗰𝗹𝗶𝗺𝗯 𝗵𝗶𝗴𝗵𝗲𝗿 
-
-👤 𝗬𝗼𝘂𝗿 𝗣𝗿𝗼𝗳𝗶𝗹𝗲
-
-𝗖𝗵𝗲𝗰𝗸 𝘆𝗼𝘂𝗿:
-• 🪙 𝗕𝗶𝗻𝗴𝗼 𝗖𝗼𝗶𝗻𝘀
-• 🎮 𝗧𝗼𝘁𝗮𝗹 𝗚𝗮𝗺𝗲𝘀
-• 🏆 𝗧𝗼𝘁𝗮𝗹 𝗪𝗶𝗻𝘀
-• 📈 𝗚𝗮𝗺𝗲 𝗣𝗿𝗼𝗴𝗿𝗲𝘀𝘀
+🏅 Win matches and earn Bingo Coins 🪙
+📈 Your stats and results are saved automatically.
+🔥 Keep winning and climb higher!
 
 🥇 𝗟𝗲𝗮𝗱𝗲𝗿𝗯𝗼𝗮𝗿𝗱
 
-𝗖𝗼𝗺𝗽𝗲𝘁𝗲 𝘄𝗶𝘁𝗵 𝗼𝘁𝗵𝗲𝗿 𝗽𝗹𝗮𝘆𝗲𝗿𝘀 𝗮𝗻𝗱 𝗳𝗶𝗴𝗵𝘁 𝗳𝗼𝗿 𝘁𝗵𝗲 #𝟭 𝘀𝗽𝗼𝘁! 👑🔥
-
-🏆 𝗧𝗼𝘂𝗿𝗻𝗮𝗺𝗲𝗻𝘁𝘀
-
-🎯 𝗝𝗼𝗶𝗻 𝘀𝗽𝗲𝗰𝗶𝗮𝗹 𝘁𝗼𝘂𝗿𝗻𝗮𝗺𝗲𝗻𝘁𝘀 𝗮𝗻𝗱 𝗰𝗼𝗺𝗽𝗲𝘁𝗲 𝗶𝗻 𝗲𝘅𝗰𝗶𝘁𝗶𝗻𝗴 𝗿𝗼𝘂𝗻𝗱𝘀!
-
-➡️ 𝗪𝗶𝗻 𝘆𝗼𝘂𝗿 𝗺𝗮𝘁𝗰𝗵
-➡️ 𝗠𝗼𝘃𝗲 𝘁𝗼 𝘁𝗵𝗲 𝗻𝗲𝘅𝘁 𝗿𝗼𝘂𝗻𝗱
-➡️ 𝗥𝗲𝗮𝗰𝗵 𝘁𝗵𝗲 𝗙𝗶𝗻𝗮𝗹
-👑 𝗕𝗲𝗰𝗼𝗺𝗲 𝘁𝗵𝗲 𝗧𝗼𝘂𝗿𝗻𝗮𝗺𝗲𝗻𝘁 𝗖𝗵𝗮𝗺𝗽𝗶𝗼𝗻!
+Compete with other players and fight for the #1 spot! 👑
 
 ❌ 𝗖𝗮𝗻𝗰𝗲𝗹𝗹𝗶𝗻𝗴 & 𝗙𝗮𝗶𝗿 𝗣𝗹𝗮𝘆
 
-𝗜𝗳 𝘆𝗼𝘂 𝗰𝗮𝗻'𝘁 𝗰𝗼𝗻𝘁𝗶𝗻𝘂𝗲, 𝘂𝘀𝗲 𝘁𝗵𝗲 𝗖𝗮𝗻𝗰𝗲𝗹 𝗼𝗽𝘁𝗶𝗼𝗻 𝘄𝗵𝗲𝗻 𝗮𝘃𝗮𝗶𝗹𝗮𝗯𝗹𝗲. 🤝
-⚠️ 𝗣𝗹𝗮𝘆 𝗳𝗮𝗶𝗿𝗹𝘆 𝗮𝗻𝗱 𝗱𝗼𝗻'𝘁 𝗸𝗲𝗲𝗽 𝘆𝗼𝘂𝗿 𝗼𝗽𝗽𝗼𝗻𝗲𝗻𝘁 𝘄𝗮𝗶𝘁𝗶𝗻𝗴!
-
-📌 𝗜𝗺𝗽𝗼𝗿𝘁𝗮𝗻𝘁 𝗥𝘂𝗹𝗲𝘀
-
-🤝 𝗥𝗲𝘀𝗽𝗲𝗰𝘁 𝗼𝘁𝗵𝗲𝗿 𝗽𝗹𝗮𝘆𝗲𝗿𝘀
-⏳ 𝗣𝗹𝗮𝘆 𝘆𝗼𝘂𝗿 𝘁𝘂𝗿𝗻𝘀 𝗼𝗻 𝘁𝗶𝗺𝗲
-🚫 𝗗𝗼𝗻'𝘁 𝗮𝗯𝘂𝘀𝗲 𝗼𝗿 𝗲𝘅𝗽𝗹𝗼𝗶𝘁 𝘁𝗵𝗲 𝗴𝗮𝗺𝗲
-❤️ 𝗛𝗮𝘃𝗲 𝗳𝘂𝗻 𝗮𝗻𝗱 𝗲𝗻𝗷𝗼𝘆!
+Use /cancel if you cannot continue the current match. 🤝
+⚠️ Play fairly and don't keep your opponent waiting!
 
 ✨ 𝗤𝘂𝗶𝗰𝗸 𝗦𝘁𝗮𝗿𝘁
 
-𝟭️ 𝗦𝘁𝗮𝗿𝘁 𝘁𝗵𝗲 𝗕𝗼𝘁 → 𝟮️ 𝗝𝗼𝗶𝗻 𝗮 𝗠𝗮𝘁𝗰𝗵 → 𝟯️ 𝗣𝗹𝗮𝘆 → 𝟰️ 𝗖𝗼𝗺𝗽𝗹𝗲𝘁𝗲 𝗕𝗜𝗡𝗚𝗢 → 𝟱️ 𝗪𝗜𝗡! 🏆 
+1️⃣ Start the Bot → 2️⃣ Join a Match → 3️⃣ Play → 4️⃣ Complete BINGO → 5️⃣ WIN! 🏆""".strip()
 
-╭───── ✨ ─────╮
-🎮 𝗣𝗹𝗮𝘆 𝗦𝗺𝗮𝗿𝘁
-🏆 𝗪𝗶𝗻 𝗕𝗶𝗴
-👑 𝗕𝗲𝗰𝗼𝗺𝗲 𝗮 𝗟𝗲𝗴𝗲𝗻𝗱
-╰───── ✨ ─────╯""".strip()
-
-async def _send_optional_photo(message, photo_url):
+async def _send_photo_with_text(message, photo_url, text, reply_markup=None):
+    """Send one Telegram message containing the photo and text as its caption."""
     if photo_url:
         try:
-            await message.reply_photo(photo=photo_url)
+            await message.reply_photo(
+                photo=photo_url,
+                caption=text,
+                reply_markup=reply_markup,
+            )
+            return
         except Exception as exc:
-            logger.warning("Could not send configured photo: %s", exc)
+            logger.warning("Could not send configured photo with caption: %s", exc)
+    # Fallback keeps the bot usable if the photo URL is not configured or fails.
+    await message.reply_text(text, reply_markup=reply_markup, disable_web_page_preview=True)
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await db.create_user(user.id, user.username, user.first_name)
 
-    await _send_optional_photo(update.message, os.getenv("START_PHOTO_URL", "").strip())
     text = await _build_start_text(user)
     keyboard = await _build_start_keyboard(context)
-    await update.message.reply_text(text, reply_markup=keyboard, disable_web_page_preview=True)
+    await _send_photo_with_text(
+        update.message, os.getenv("START_PHOTO_URL", "").strip(), text, keyboard
+    )
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -188,9 +162,10 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await db.get_user(user.id):
         await db.create_user(user.id, user.username, user.first_name)
 
-    await _send_optional_photo(update.message, os.getenv("HELP_PHOTO_URL", "").strip())
     text = await _build_help_text(user)
-    await update.message.reply_text(text, disable_web_page_preview=True)
+    await _send_photo_with_text(
+        update.message, os.getenv("HELP_PHOTO_URL", "").strip(), text
+    )
 
 async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -672,12 +647,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_leaderboard_callback(update, context)
     elif data == "start_help":
         user = query.from_user
-        # Use exactly the same dynamic help text as the /help command.
+        # Send the HELP photo and text together as one message.
         text = await _build_help_text(user)
-        try:
-            await query.message.edit_text(text, parse_mode="HTML", reply_markup=await _build_start_keyboard(context), disable_web_page_preview=True)
-        except BadRequest:
-            pass
+        await _send_photo_with_text(
+            query.message, os.getenv("HELP_PHOTO_URL", "").strip(), text
+        )
         await query.answer()
     else:
         await query.answer()
