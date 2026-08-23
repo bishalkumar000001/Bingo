@@ -37,7 +37,7 @@ def _rounded(draw, box, radius, fill=None, outline=None, width=1):
     draw.rounded_rectangle(box, radius=radius, fill=fill, outline=outline, width=width)
 
 
-async def build_profile_image(player: dict) -> BytesIO:
+async def build_profile_image(player: dict, avatar_bytes=None) -> BytesIO:
     """Create a rectangular neon profile card from live player data."""
     width, height = 1200, 820
     image = Image.new("RGB", (width, height), "#070814")
@@ -86,12 +86,31 @@ async def build_profile_image(player: dict) -> BytesIO:
         draw, username, max_width=320, start_size=34, min_size=16, bold=True
     )
 
-    # Avatar placeholder.
+    # Profile avatar. Use Telegram profile photo when avatar bytes are available.
     avatar_box = (70, 220, 320, 470)
     draw.ellipse(avatar_box, fill="#101633", outline="#5a62ff", width=7)
-    # Simple person icon.
-    draw.ellipse((145, 270, 245, 370), fill="#4c77df")
-    _rounded(draw, (105, 375, 285, 455), 75, fill="#493bb7")
+    if avatar_bytes:
+        try:
+            avatar = Image.open(BytesIO(avatar_bytes)).convert("RGB")
+            side = min(avatar.size)
+            left = (avatar.width - side) // 2
+            top = (avatar.height - side) // 2
+            avatar = avatar.crop((left, top, left + side, top + side)).resize((230, 230), Image.LANCZOS)
+
+            # Circular alpha mask keeps the photo inside the profile circle.
+            mask = Image.new("L", (230, 230), 0)
+            mask_draw = ImageDraw.Draw(mask)
+            mask_draw.ellipse((0, 0, 229, 229), fill=255)
+            image.paste(avatar, (80, 230), mask)
+            draw.ellipse((70, 220, 320, 470), outline="#8b6cff", width=7)
+        except Exception:
+            # Fall back to the default avatar icon if Telegram photo data cannot be read.
+            draw.ellipse((145, 270, 245, 370), fill="#4c77df")
+            _rounded(draw, (105, 375, 285, 455), 75, fill="#493bb7")
+    else:
+        # Default avatar icon when the user has no Telegram profile photo.
+        draw.ellipse((145, 270, 245, 370), fill="#4c77df")
+        _rounded(draw, (105, 375, 285, 455), 75, fill="#493bb7")
 
     # Identity panel.
     _rounded(draw, (355, 225, 735, 330), 20, fill="#111833", outline="#2b9eff", width=2)
