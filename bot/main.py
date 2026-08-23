@@ -46,23 +46,17 @@ async def _build_start_text(user):
     name = user.full_name or user.first_name or "Player"
     return f"""🎮 𝗪𝗲𝗹𝗰𝗼𝗺𝗲 {name} 🎉
 🎯 𝗛𝗼𝘄 𝘁𝗼 𝗣𝗹𝗮𝘆?
-
-- Start a 1v1 game and challenge another player.
-
-* Both players get a 5x5 Bingo card with numbers 1-25.
-
-- Take turns choosing numbers.
-
-* The chosen number is marked on both cards.
-
-- Complete 5 lines — Rows, Columns or Diagonals — to complete BINGO. The first player to complete it wins 🎊
+● Start a 1v1 game and challenge another player.
+● Both players get a 5x5 Bingo card with numbers 1-25.
+● Take turns choosing numbers.
+● The chosen number is marked on both cards.
+● Complete 5 lines — Rows, Columns or Diagonals — to complete BINGO. The first player to complete it wins 🎊
 
 💰 𝗣𝗹𝗮𝘆 & 𝗘𝗮𝗿𝗻
-
-🏅 𝗪𝗶𝗻 𝗺𝗮𝘁𝗰𝗵𝗲𝘀 𝗮𝗻𝗱 𝗲𝗮𝗿𝗻 𝗕𝗶𝗻𝗴𝗼 𝗖𝗼𝗶𝗻𝘀
-📊 𝗖𝗵𝗲𝗰𝗸 𝘆𝗼𝘂𝗿 𝗦𝘁𝗮𝘁𝘀 & 𝗪𝗶𝗻𝘀
-🥇 𝗖𝗹𝗶𝗺𝗯 𝘁𝗵𝗲 𝗟𝗲𝗮𝗱𝗲𝗿𝗯𝗼𝗮𝗿𝗱
-🏆 𝗝𝗼𝗶𝗻 𝗧𝗼𝘂𝗿𝗻𝗮𝗺𝗲𝗻𝘁𝘀 & 𝗰𝗼𝗺𝗽𝗲𝘁𝗲 𝗳𝗼𝗿 𝗿𝗲𝘄𝗮𝗿𝗱𝘀!
+● 𝗪𝗶𝗻 𝗺𝗮𝘁𝗰𝗵𝗲𝘀 𝗮𝗻𝗱 𝗲𝗮𝗿𝗻 𝗕𝗶𝗻𝗴𝗼 𝗖𝗼𝗶𝗻𝘀
+● 𝗖𝗵𝗲𝗰𝗸 𝘆𝗼𝘂𝗿 𝗦𝘁𝗮𝘁𝘀 & 𝗪𝗶𝗻𝘀
+● 𝗖𝗹𝗶𝗺𝗯 𝘁𝗵𝗲 𝗟𝗲𝗮𝗱𝗲𝗿𝗯𝗼𝗮𝗿𝗱
+● 𝗝𝗼𝗶𝗻 𝗧𝗼𝘂𝗿𝗻𝗮𝗺𝗲𝗻𝘁𝘀 & 𝗰𝗼𝗺𝗽𝗲𝘁𝗲 𝗳𝗼𝗿 𝗿𝗲𝘄𝗮𝗿𝗱𝘀!
 
 ✨ 𝗡𝗼 𝗰𝗼𝗺𝗽𝗹𝗶𝗰𝗮𝘁𝗲𝗱 𝗿𝘂𝗹𝗲𝘀 — 𝗷𝘂𝘀𝘁 𝗽𝗹𝗮𝘆, 𝗰𝗼𝗺𝗽𝗹𝗲𝘁𝗲 𝘆𝗼𝘂𝗿 𝗕𝗜𝗡𝗚𝗢 & 𝗵𝗮𝘃𝗲 𝗳𝘂𝗻! ❤️
 
@@ -88,7 +82,7 @@ async def _build_help_text(user):
     name = user.full_name or user.first_name or "Player"
     return f"""🎮 𝗪𝗲𝗹𝗰𝗼𝗺𝗲, {name}!
 
-🎯 𝗦𝘁𝗮𝗿𝘁𝗶𝗻𝗴 𝗮 𝗚𝗮𝗺𝗲
+🎯 𝗦𝘁𝗮𝗿𝘁 𝗮 𝗚𝗮𝗺𝗲
 
 🎮 Create or join a 1v1 match with another player.
 🤝 Once both players join, the game begins.
@@ -97,13 +91,11 @@ async def _build_help_text(user):
 📩 Start the bot in private using /start to receive your card and game updates.
 
 🔄 𝗛𝗼𝘄 𝘁𝗵𝗲 𝗚𝗮𝗺𝗲 𝗪𝗼𝗿𝗸𝘀
-
 👆 Players take turns choosing numbers.
 ✅ The selected number is marked on both Bingo cards.
 🧠 Complete your lines before your opponent!
 
 🏆 𝗛𝗼𝘄 𝘁𝗼 𝗪𝗶𝗻
-
 Complete 5 full lines to make BINGO:
 ➖ Rows — Left to right
 ⬇️ Columns — Top to bottom
@@ -111,23 +103,14 @@ Complete 5 full lines to make BINGO:
 
 🎉 The first player to complete 5 lines wins the match! 👑🏆
 
-💰 𝗖𝗼𝗶𝗻𝘀 & 𝗪𝗶𝗻𝘀
-
-🏅 Win matches and earn Bingo Coins 🪙
-📈 Your stats and results are saved automatically.
-🔥 Keep winning and climb higher!
-
 🥇 𝗟𝗲𝗮𝗱𝗲𝗿𝗯𝗼𝗮𝗿𝗱
-
 Compete with other players and fight for the #1 spot! 👑
 
 ❌ 𝗖𝗮𝗻𝗰𝗲𝗹𝗹𝗶𝗻𝗴 & 𝗙𝗮𝗶𝗿 𝗣𝗹𝗮𝘆
-
 Use /cancel if you cannot continue the current match. 🤝
 ⚠️ Play fairly and don't keep your opponent waiting!
 
 ✨ 𝗤𝘂𝗶𝗰𝗸 𝗦𝘁𝗮𝗿𝘁
-
 1️⃣ Start the Bot → 2️⃣ Join a Match → 3️⃣ Play → 4️⃣ Complete BINGO → 5️⃣ WIN! 🏆""".strip()
 
 async def _send_photo_with_text(message, photo_url, text, reply_markup=None):
