@@ -105,10 +105,10 @@ async def _try_edit(context, chat_id, message_id, text, keyboard=None):
             if "Message is not modified" in str(e):
                 return True
 
-            await asyncio.sleep(0.5)
+            await asynsio.sleep(0.5)
 
         except Exception:
-            await asyncio.sleep(0.5)
+            await asynsio.sleep(0.5)
             
     return False
 
@@ -212,12 +212,20 @@ async def update_group_turn_panel(
 
 async def update_live_message(context, room, p1, p2):
     text = build_live_message(room, p1, p2)
-    if room.get("live_message_id"):
-        if await _try_edit(context, room["chat_id"], room["live_message_id"], text):
+    if not room.get("live_message_id"):
+        if await _try_edit(
+            context,
+            room["chat_id"],
+            room["live_message_id"],
+            text,
+        ):
             return
     try:
-        msg = await context.bot.send_message(chat_id=room["chat_id"], text=text, parse_mode="HTML")
-        await db.update_room(room["id"], live_message_id=msg.message_id)
+        msg = await context.bot.edit_message_text(
+            chat_id=room["chat_id"],
+            text=text,
+            parse_mode="HTML",
+        )
     except BadRequest:
         pass
 
@@ -556,8 +564,7 @@ async def handle_card_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 async def handle_bingo_win(context, room, winner_id, p1, p2, called):
     chat_id = room["chat_id"]
     loser_id = room["player2_id"] if winner_id == room["player1_id"] else room["player1_id"]
-    if not await db.finish_room(room["id"]):
-        return
+    await db.finish_room(room["id"])
     if room.get("last_call_message_id"):
         try:
             await context.bot.delete_message(
@@ -589,13 +596,18 @@ async def handle_bingo_win(context, room, winner_id, p1, p2, called):
         award_winner(winner_id, chat_id),
         record_loss(loser_id, chat_id),
     )
-    from tournament import record_match_result
-    await record_match_result(context, room, winner_id, loser_id)
 
     winner = p1 if winner_id == room["player1_id"] else p2
     loser = p2 if winner_id == room["player1_id"] else p1
     winner_name = display_name_from_db(winner)
     loser_name = display_name_from_db(loser)
+
+    if room.get("tournament_id"):
+        try:
+            from tournament import handle_tournament_match_result
+            await handle_tournament_match_result(context, room, winner_id)
+        except Exception as exc:
+            _log(context, f"⚠️ Tournament update failed: {exc}")
 
     win_text = (
         f"🏆 <b>BINGO!</b>\n\n"
@@ -606,7 +618,7 @@ async def handle_bingo_win(context, room, winner_id, p1, p2, called):
         f"📋 Numbers called: {format_called_numbers(called)}"
     )
 
-    rematch_kb = InlineKeyboardMarkup([[
+    rematch_kb = None if room.get("tournament_id") else InlineKeyboardMarkup([[
         InlineKeyboardButton("🔄 Rematch!", callback_data=f"rematch:{room['id']}")
     ]])
 
@@ -710,11 +722,6 @@ async def _end_game_by_cancellation(context, room: dict, forfeiter_id: int, forf
     """Shared logic: close the room and clean up messages after a free cancel or forfeit."""
     chat_id = room["chat_id"]
     await db.cancel_room(room["id"])
-    if room.get("tournament_id") and room.get("tournament_match_id"):
-        opponent_id = (room["player2_id"] if forfeiter_id == room["player1_id"]
-                       else room["player1_id"])
-        from tournament import record_match_result
-        await record_match_result(context, room, opponent_id, forfeiter_id)
     for mid_key in ("live_message_id", "last_call_message_id", "group_panel_message_id"):
         mid = room.get(mid_key)
         if mid:

@@ -95,6 +95,8 @@ def build_dm_card_keyboard(
                 label = str(num)
             row.append(InlineKeyboardButton(label, callback_data=f"card:{room_id}:{num}"))
         rows.append(row)
+    return InlineKeyboardMarkup(rows)
+
     # ── Cancel / Forfeit button ────────────────────────────────────────────
     # Free cancel while the first 5 (or fewer) numbers have been called.
     # After the 5th number the button becomes a paid forfeit (−500 coins).
@@ -113,7 +115,6 @@ def build_dm_card_keyboard(
                 callback_data=f"forfeit_ask:{room_id}",
             )
         ])
-    return InlineKeyboardMarkup(rows)
 
 
 def build_group_turn_text(room_number: int, player_name: str, opponent_name: str,

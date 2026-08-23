@@ -30,6 +30,8 @@ async def cmd_bingo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    await db.register_group_chat(chat.id, chat.title or "", chat.username or "")
+
     player = await db.get_user(user.id)
     if not player:
         await update.message.reply_text(

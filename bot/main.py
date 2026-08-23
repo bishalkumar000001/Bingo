@@ -1,7 +1,7 @@
 import os
 import asyncio
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -10,11 +10,7 @@ from telegram.ext import (
     ContextTypes,
 )
 from telegram.error import BadRequest, Forbidden
-try:
-    from webserver import start_webserver
-except ImportError:
-    def start_webserver():
-        return None
+from webserver import start_webserver
 
 import database as db
 from rooms import cmd_bingo, handle_join_callback, handle_cancel_room_callback, cmd_stopbingo
@@ -30,11 +26,8 @@ from game import (
 from economy import award_winner, record_loss, process_forfeit
 from leaderboard import build_leaderboard_text, build_leaderboard_keyboard
 from utils import display_name_from_db, display_name
+from tournament import cmd_tournament, cmd_join_tournament, cmd_round
 from models import LINES_TO_WIN, WIN_COINS, FORFEIT_COST, CANCEL_FREE_THRESHOLD, OWNER_ID, LOGGER_GROUP_ID, SUPPORT_CHANNEL
-from tournament import (
-    cmd_tournament, cmd_create, cmd_join, cmd_leave, cmd_status, join_callback,
-    start_tournament, recover_active_tournaments,
-)
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -48,61 +41,37 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await db.create_user(user.id, user.username, user.first_name)
 
     name = user.first_name or user.username or "Player"
-    bot_username = context.bot.username
-    start_keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton(
-                "📢 Support Channel",
-                url=SUPPORT_CHANNEL if SUPPORT_CHANNEL else "https://t.me/",
-            ),
-            InlineKeyboardButton(
-                "➕ Add Me",
-                url=f"https://t.me/{bot_username}?startgroup=true",
-            ),
-        ],
-        [InlineKeyboardButton("📖 Help / Commands", callback_data="help_menu")],
-    ])
     await update.message.reply_text(
-        f"🎮 𝗪𝗲𝗹𝗰𝗼𝗺𝗲 {name} 🎉\n\n"
-        "𝗥𝗲𝗮𝗱𝘆 𝘁𝗼 𝗽𝗹𝗮𝘆 𝗕𝗶𝗻𝗴𝗼 𝘄𝗶𝘁𝗵 𝘆𝗼𝘂𝗿 𝗳𝗿𝗶𝗲𝗻𝗱𝘀 𝗮𝗻𝗱 𝗼𝘁𝗵𝗲𝗿 𝗽𝗹𝗮𝘆𝗲𝗿𝘀? 𝗜𝘁'𝘀 𝗲𝗮𝘀𝘆, 𝗳𝘂𝗻 & 𝗲𝘅𝗰𝗶𝘁𝗶𝗻𝗴! 🔥\n\n"
-        "╭─❖ 🎯 𝗛𝗼𝘄 𝘁𝗼 𝗣𝗹𝗮𝘆? ❖─╮\n"
-        "🔢 𝗦𝘁𝗮𝗿𝘁 𝗮 𝟭𝘃𝟭 𝗴𝗮𝗺𝗲 𝗮𝗻𝗱 𝗰𝗵𝗮𝗹𝗹𝗲𝗻𝗴𝗲 𝗮𝗻𝗼𝘁𝗵𝗲𝗿 𝗽𝗹𝗮𝘆𝗲𝗿.\n"
-        "🎲 𝗕𝗼𝘁𝗵 𝗽𝗹𝗮𝘆𝗲𝗿𝘀 𝗴𝗲𝘁 𝗮 𝟱×𝟱 𝗕𝗶𝗻𝗴𝗼 𝗰𝗮𝗿𝗱 𝘄𝗶𝘁𝗵 𝗻𝘂𝗺𝗯𝗲𝗿𝘀 𝟭–𝟮𝟱.\n"
-        "👆 𝗧𝗮𝗸𝗲 𝘁𝘂𝗿𝗻𝘀 𝗰𝗵𝗼𝗼𝘀𝗶𝗻𝗴 𝗻𝘂𝗺𝗯𝗲𝗿𝘀.\n"
-        "✅ 𝗧𝗵𝗲 𝗰𝗵𝗼𝘀𝗲𝗻 𝗻𝘂𝗺𝗯𝗲𝗿 𝗶𝘀 𝗺𝗮𝗿𝗸𝗲𝗱 𝗼𝗻 𝗯𝗼𝘁𝗵 𝗰𝗮𝗿𝗱𝘀.\n"
-        "🏆 𝗖𝗼𝗺𝗽𝗹𝗲𝘁𝗲 𝟱 𝗹𝗶𝗻𝗲𝘀 — 𝗥𝗼𝘄𝘀, 𝗖𝗼𝗹𝘂𝗺𝗻𝘀 𝗼𝗿 𝗗𝗶𝗮𝗴𝗼𝗻𝗮𝗹𝘀 — 𝘁𝗼 𝗰𝗼𝗺𝗽𝗹𝗲𝘁𝗲 𝗕𝗜𝗡𝗚𝗢. 𝗧𝗵𝗲 𝗳𝗶𝗿𝘀𝘁 𝗽𝗹𝗮𝘆𝗲𝗿 𝘁𝗼 𝗰𝗼𝗺𝗽𝗹𝗲𝘁𝗲 𝗶𝘁 𝘄𝗶𝗻𝘀! 🎊\n\n"
-        "╰─❖ 💰 𝗣𝗹𝗮𝘆 & 𝗘𝗮𝗿𝗻 ❖─╯\n"
-        "🏅 𝗪𝗶𝗻 𝗺𝗮𝘁𝗰𝗵𝗲𝘀 𝗮𝗻𝗱 𝗲𝗮𝗿𝗻 𝗕𝗶𝗻𝗴𝗼 𝗖𝗼𝗶𝗻𝘀\n"
-        "📊 𝗖𝗵𝗲𝗰𝗸 𝘆𝗼𝘂𝗿 𝗦𝘁𝗮𝘁𝘀 & 𝗪𝗶𝗻𝘀\n"
-        "🥇 𝗖𝗹𝗶𝗺𝗯 𝘁𝗵𝗲 𝗟𝗲𝗮𝗱𝗲𝗿𝗯𝗼𝗮𝗿𝗱\n"
-        "🏆 𝗝𝗼𝗶𝗻 𝗧𝗼𝘂𝗿𝗻𝗮𝗺𝗲𝗻𝘁𝘀 & 𝗰𝗼𝗺𝗽𝗲𝘁𝗲 𝗳𝗼𝗿 𝗿𝗲𝘄𝗮𝗿𝗱𝘀!\n\n"
-        "✨ 𝗡𝗼 𝗰𝗼𝗺𝗽𝗹𝗶𝗰𝗮𝘁𝗲𝗱 𝗿𝘂𝗹𝗲𝘀 — 𝗷𝘂𝘀𝘁 𝗽𝗹𝗮𝘆, 𝗰𝗼𝗺𝗽𝗹𝗲𝘁𝗲 𝘆𝗼𝘂𝗿 𝗕𝗜𝗡𝗚𝗢 & 𝗵𝗮𝘃𝗲 𝗳𝘂𝗻! ❤️\n"
-        "👇 𝗖𝗵𝗼𝗼𝘀𝗲 𝗮𝗻 𝗼𝗽𝘁𝗶𝗼𝗻 𝗯𝗲𝗹𝗼𝘄 𝗮𝗻𝗱 𝘀𝘁𝗮𝗿𝘁 𝗽𝗹𝗮𝘆𝗶𝗻𝗴! 🎮\n"
-        "👑 𝗣𝗹𝗮𝘆 • 𝗪𝗶𝗻 • 𝗕𝗲𝗰𝗼𝗺𝗲 𝘁𝗵𝗲 𝗕𝗶𝗻𝗴𝗼 𝗖𝗵𝗮𝗺𝗽𝗶𝗼𝗻! 🏆",
+        f"🎮 <b>Welcome to Velocity Bingo, {name}!</b>\n\n"
+        "This is a turn-based Bingo game where YOU call the numbers!\n\n"
+        "<b>How to play:</b>\n"
+        "1️⃣ Add me to a group chat\n"
+        "2️⃣ Use /bingo to create a room\n"
+        "3️⃣ A second player joins your room\n"
+        "4️⃣ You each get a private 5×5 card (1–25)\n"
+        "5️⃣ Take turns calling numbers\n"
+        f"6️⃣ First to complete <b>{LINES_TO_WIN} lines</b> wins!\n\n"
+        "<b>Commands:</b>\n"
+        "/bingo — Create a new match (in a group)\n"
+        "/cancel — Forfeit your current game\n"
+        "/profile — View your stats\n"
+        "/leaderboard — See top players\n"
+        "/give — Transfer coins to another player\n"
+        "/stopbingo — Cancel all rooms (admins only)\n"
+        "/join — Join the active tournament (DM only)\n"
+        "/tournamentinfo — View tournament information\n\n"
+        "✅ You're registered! Go add me to a group and start playing.",
         parse_mode="HTML",
-        reply_markup=start_keyboard,
     )
 
 
-HELP_TEXT = (
-    "🎮 <b>Velocity Bingo — Help & Commands</b>\n\n"
-    "🎯 <b>Game</b>\n"
-    "/bingo — Create a 1v1 Bingo match in a group\n"
-    "/cancel — Cancel or forfeit your current match\n\n"
-    "💰 <b>Account</b>\n"
-    "/profile — View your stats and coin balance\n"
-    "/leaderboard — View the top players\n"
-    "/give @username amount — Transfer Bingo Coins\n\n"
-    "🏆 <b>Tournaments</b>\n"
-    "/tournament — View open tournaments\n"
-    "/jointournament ID — Join a tournament\n"
-    "/tournamentstatus ID — View bracket progress\n\n"
-    "Start the bot in a private chat before playing so your Bingo card can be delivered."
-)
-
-
-async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(HELP_TEXT, parse_mode="HTML")
+async def cmd_tournamentinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    t = await db.get_active_tournament()
+    if not t:
+        await update.message.reply_text("❌ No active tournament right now.")
+        return
+    from tournament import _send_tournament_info
+    await _send_tournament_info(context.bot, update.effective_chat.id, t)
 
 
 async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -247,9 +216,6 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(called) <= CANCEL_FREE_THRESHOLD:
         # ── Free cancel (1–5 numbers called) ──────────────────────────────
         await db.cancel_room(room["id"])
-        if room.get("tournament_id") and room.get("tournament_match_id"):
-            from tournament import record_match_result
-            await record_match_result(context, room, opponent_id, user.id)
         for mid_key in ("live_message_id", "last_call_message_id", "group_panel_message_id"):
             mid = room.get(mid_key)
             if mid:
@@ -289,9 +255,6 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         await db.cancel_room(room["id"])
-        if room.get("tournament_id") and room.get("tournament_match_id"):
-            from tournament import record_match_result
-            await record_match_result(context, room, opponent_id, user.id)
         for mid_key in ("live_message_id", "last_call_message_id", "group_panel_message_id"):
             mid = room.get(mid_key)
             if mid:
@@ -338,17 +301,20 @@ async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not source and not context.args:
         await update.message.reply_text(
             "Usage:\n"
-            "• Reply to a message with /broadcast to forward it to all users\n"
-            "• /broadcast <text> to send a plain message"
+            "• Reply to a message with /broadcast to send it to all players and groups\n"
+            "• /broadcast <text> to send a plain message to all players and groups"
         )
         return
 
     user_ids = await db.get_all_user_ids()
-    sent = failed = 0
+    group_ids = await db.get_all_group_chat_ids()
 
     status_msg = await update.message.reply_text(
-        f"📡 Broadcasting to <b>{len(user_ids)}</b> users...", parse_mode="HTML"
+        f"📡 Broadcasting to <b>{len(user_ids)}</b> players and <b>{len(group_ids)}</b> Telegram groups...",
+        parse_mode="HTML",
     )
+
+    sent_users = failed_users = sent_groups = failed_groups = 0
 
     for uid in user_ids:
         try:
@@ -356,15 +322,28 @@ async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await source.copy(chat_id=uid)
             else:
                 await context.bot.send_message(
-                    chat_id=uid,
-                    text=" ".join(context.args),
-                    parse_mode="HTML",
+                    chat_id=uid, text=" ".join(context.args), parse_mode="HTML"
                 )
-            sent += 1
+            sent_users += 1
         except (Forbidden, BadRequest):
-            failed += 1
+            failed_users += 1
         except Exception:
-            failed += 1
+            failed_users += 1
+        await asyncio.sleep(0.05)
+
+    for gid in group_ids:
+        try:
+            if source:
+                await source.copy(chat_id=gid)
+            else:
+                await context.bot.send_message(
+                    chat_id=gid, text=" ".join(context.args), parse_mode="HTML"
+                )
+            sent_groups += 1
+        except (Forbidden, BadRequest):
+            failed_groups += 1
+        except Exception:
+            failed_groups += 1
         await asyncio.sleep(0.05)
 
     try:
@@ -372,8 +351,8 @@ async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"📡 <b>Broadcast Complete!</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"📨 Sent: <b>{sent}</b>\n"
-            f"❌ Failed: <b>{failed}</b>\n\n"
+            f"👤 <b>Player DMs</b>\n📨 Sent: <b>{sent_users}</b>\n❌ Failed: <b>{failed_users}</b>\n\n"
+            f"👥 <b>Telegram Groups</b>\n📨 Sent: <b>{sent_groups}</b>\n❌ Failed: <b>{failed_groups}</b>\n\n"
             f"━━━━━━━━━━━━━━━━━━━━",
             parse_mode="HTML",
         )
@@ -483,9 +462,6 @@ async def cmd_give(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not LOGGER_GROUP_ID:
-        return
-
     result = update.my_chat_member
     if not result:
         return
@@ -500,6 +476,17 @@ async def handle_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TY
 
     chat = result.chat
     if chat.type not in ("group", "supergroup"):
+        return
+
+    if new_status in ("member", "administrator"):
+        await db.register_group_chat(chat.id, chat.title or "", chat.username or "")
+
+    if new_status not in ("member", "administrator"):
+        return
+    if old_status in ("member", "administrator"):
+        return
+
+    if not LOGGER_GROUP_ID:
         return
 
     added_by = result.from_user
@@ -545,19 +532,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
 
-    if data == "help_menu":
-        await query.answer()
-        await query.message.reply_text(HELP_TEXT, parse_mode="HTML")
-    elif data.startswith("tj:"):
-        await join_callback(update, context)
-    elif data.startswith("ts:"):
-        tid = data.split(":", 1)[1]
-        t = await db.get_tournament(tid)
-        await query.answer()
-        if t:
-            from tournament import tournament_text
-            await query.message.reply_text(await tournament_text(t), parse_mode="HTML")
-    elif data.startswith("join:"):
+    if data.startswith("join:"):
         await handle_join_callback(update, context)
     elif data.startswith("cancel_room:"):
         await handle_cancel_room_callback(update, context)
@@ -581,16 +556,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def post_init(application: Application):
     await db.init_db()
-    await recover_active_tournaments(application)
     logger.info("Database initialized.")
-
-
-async def _start_tournament_command(update, context):
-    if update.effective_user.id != OWNER_ID or not context.args:
-        await update.message.reply_text("Usage: /starttournament TOURNAMENT_ID (owner only)")
-        return
-    await start_tournament(context.args[0], context)
-    await update.message.reply_text("✅ Tournament started or is already in progress.")
 
 
 def main():
@@ -606,20 +572,17 @@ def main():
     )
 
     app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("bingo", cmd_bingo))
     app.add_handler(CommandHandler("cancel", cmd_cancel))
     app.add_handler(CommandHandler("profile", cmd_profile))
     app.add_handler(CommandHandler("leaderboard", cmd_leaderboard))
     app.add_handler(CommandHandler("stopbingo", cmd_stopbingo))
+    app.add_handler(CommandHandler("join", cmd_join_tournament))
+    app.add_handler(CommandHandler("tournament", cmd_tournament))
+    app.add_handler(CommandHandler("tournamentinfo", cmd_tournamentinfo))
+    app.add_handler(CommandHandler("round", cmd_round))
     app.add_handler(CommandHandler("broadcast", cmd_broadcast))
     app.add_handler(CommandHandler("give", cmd_give))
-    app.add_handler(CommandHandler("tournament", cmd_tournament))
-    app.add_handler(CommandHandler("createtournament", cmd_create))
-    app.add_handler(CommandHandler("jointournament", cmd_join))
-    app.add_handler(CommandHandler("leavetournament", cmd_leave))
-    app.add_handler(CommandHandler("tournamentstatus", cmd_status))
-    app.add_handler(CommandHandler("starttournament", _start_tournament_command))
     app.add_handler(ChatMemberHandler(handle_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
