@@ -8,6 +8,8 @@ from telegram.ext import (
     CallbackQueryHandler,
     ChatMemberHandler,
     ContextTypes,
+    MessageHandler,
+    filters,
 )
 from telegram.error import BadRequest, Forbidden
 from webserver import start_webserver
@@ -26,7 +28,7 @@ from game import (
 from economy import award_winner, record_loss, process_forfeit
 from leaderboard import build_leaderboard_text, build_leaderboard_keyboard
 from utils import display_name_from_db, display_name
-from tournament import cmd_tournament, cmd_join_tournament, cmd_round
+from tournament import cmd_tournament, cmd_join_tournament, cmd_round, cmd_disqualify, handle_tournament_callback, capture_tournament_creator_input
 from models import LINES_TO_WIN, WIN_COINS, FORFEIT_COST, CANCEL_FREE_THRESHOLD, OWNER_ID, LOGGER_GROUP_ID, SUPPORT_CHANNEL
 
 logging.basicConfig(
@@ -532,7 +534,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
 
-    if data.startswith("join:"):
+    if data.startswith("tcreate:") or data.startswith("tjoin:"):
+        await handle_tournament_callback(update, context)
+    elif data.startswith("join:"):
         await handle_join_callback(update, context)
     elif data.startswith("cancel_room:"):
         await handle_cancel_room_callback(update, context)
@@ -579,12 +583,14 @@ def main():
     app.add_handler(CommandHandler("stopbingo", cmd_stopbingo))
     app.add_handler(CommandHandler("join", cmd_join_tournament))
     app.add_handler(CommandHandler("tournament", cmd_tournament))
+    app.add_handler(CommandHandler("disqualify", cmd_disqualify))
     app.add_handler(CommandHandler("tournamentinfo", cmd_tournamentinfo))
     app.add_handler(CommandHandler("round", cmd_round))
     app.add_handler(CommandHandler("broadcast", cmd_broadcast))
     app.add_handler(CommandHandler("give", cmd_give))
     app.add_handler(ChatMemberHandler(handle_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
     app.add_handler(CallbackQueryHandler(handle_callback))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, capture_tournament_creator_input), group=-1)
 
     logger.info("🎮 Velocity Bingo Bot is starting...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)

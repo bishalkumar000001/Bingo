@@ -51,10 +51,40 @@ async def _send_tournament_info(bot, chat_id, tournament):
     await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
 
 
+def _draft(context):
+    return context.user_data.setdefault("tournament_draft", {
+        "title": "", "prize": "", "max_players": "", "start_at": "", "rules": ""
+    })
+
+
+def _draft_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🏆 Name", callback_data="tcreate:title"),
+         InlineKeyboardButton("🎁 Prize", callback_data="tcreate:prize")],
+        [InlineKeyboardButton("👥 Maximum Players", callback_data="tcreate:max_players")],
+        [InlineKeyboardButton("📅 Date & Time of Match", callback_data="tcreate:start_at")],
+        [InlineKeyboardButton("📜 Rules", callback_data="tcreate:rules")],
+        [InlineKeyboardButton("👀 Preview", callback_data="tcreate:preview"),
+         InlineKeyboardButton("✅ Create Tournament", callback_data="tcreate:create")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="tcreate:cancel")],
+    ])
+
+
+def _draft_text(d):
+    return (
+        "🏆 <b>Tournament Creator</b>\n\n"
+        f"🏆 <b>Name:</b> {escape(d.get('title') or 'Not set')}\n"
+        f"🎁 <b>Prize:</b> {escape(d.get('prize') or 'Not set')}\n"
+        f"👥 <b>Maximum Players:</b> {escape(str(d.get('max_players') or 'Not set'))}\n"
+        f"📅 <b>Date & Time:</b> {escape(d.get('start_at') or 'Not set')}\n"
+        f"📜 <b>Rules:</b> {escape(d.get('rules') or 'Not set')}\n\n"
+        "Tap a button below to enter or change each detail."
+    )
+
+
 async def cmd_tournament(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     args = context.args
-
     if not _is_owner(user.id):
         await update.message.reply_text("🚫 Only the bot owner can manage tournaments.")
         return
@@ -62,85 +92,57 @@ async def cmd_tournament(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🔒 Tournament management commands work only in the bot DM.")
         return
 
-    if not args:
-        t = await _active_tournament()
-        if not t:
-            await update.message.reply_text(
-                "🏆 <b>Tournament Control</b>\n\n"
-                "/tournament create Title | Prize | Start time | Max players | Rules\n"
-                "/tournament info\n"
-                "/tournament announce\n"
-                "/tournament start\n"
-                "/tournament cancel\n"
-                "/round — create the next knockout round after the current round is complete\n\n"
-                "Players register with /join.", parse_mode="HTML")
+    action = args[0].lower() if args else ""
+    if action == "create" and len(args) == 1:
+        if await _active_tournament():
+            await update.message.reply_text("❌ An active tournament already exists. Cancel it first.")
             return
-        await _send_tournament_info(context.bot, user.id, t)
+        context.user_data["tournament_draft"] = {"title":"", "prize":"", "max_players":"", "start_at":"", "rules":""}
+        context.user_data.pop("tournament_waiting_field", None)
+        await update.message.reply_text(_draft_text(_draft(context)), parse_mode="HTML", reply_markup=_draft_keyboard())
         return
 
-    action = args[0].lower()
-    if action == "create":
+    # Backward-compatible direct creation format.
+    if action == "create" and len(args) > 1:
         if await _active_tournament():
             await update.message.reply_text("❌ An active tournament already exists. Cancel it first.")
             return
         payload = update.message.text.partition("create")[2].strip()
-        parts = [p.strip() for p in payload.split("|")]
-        if len(parts) < 2:
-            await update.message.reply_text(
-                "Usage:\n/tournament create Title | Prize | Start time | Max players | Rules\n\n"
-                "Example:\n/tournament create Velocity Grand Bingo | ₹50,000 Cash + Premium + NFT | 25 Aug 2026 8:00 PM | 64 | Single elimination"
-            )
+        parts = [x.strip() for x in payload.split("|")]
+        if len(parts) < 5:
+            await update.message.reply_text("Use the new creator panel: /tournament create")
             return
-        title = parts[0]
-        prize = parts[1]
-        start_at = parts[2] if len(parts) > 2 and parts[2] else None
-        max_players = None
-        if len(parts) > 3 and parts[3]:
-            try:
-                max_players = int(parts[3])
-            except ValueError:
-                await update.message.reply_text("❌ Max players must be a number.")
-                return
-            if max_players < 2:
-                await update.message.reply_text("❌ Max players must be at least 2.")
-                return
-        rules = parts[4] if len(parts) > 4 and parts[4] else "Single-elimination Bingo tournament. Winners advance to the next round."
-        if not TOURNAMENT_GROUP_ID:
-            await update.message.reply_text("❌ TOURNAMENT_GROUP_ID is not configured.")
-            return
-        t = await db.create_tournament(
-            title=title, prize=prize, start_at=start_at, max_players=max_players,
-            rules=rules, group_id=TOURNAMENT_GROUP_ID,
-        )
+        d = {"title":parts[0], "prize":parts[1], "start_at":parts[2], "max_players":parts[3], "rules":parts[4]}
+        context.user_data["tournament_draft"] = d
+        await _create_from_draft(update, context)
+        return
+
+    if not action:
         await update.message.reply_text(
-            f"✅ Tournament created: <b>{escape(title)}</b>\n\n"
-            f"Players can now join with /join in DM after joining the official group.\n"
-            f"Use /tournament announce to publish it.", parse_mode="HTML")
+            "🏆 <b>Tournament Control</b>\n\n"
+            "/tournament create — open inline tournament creator\n"
+            "/tournament info\n/tournament announce\n/tournament start\n/tournament cancel\n"
+            "/disqualify @username\n/round", parse_mode="HTML")
         return
 
     t = await _active_tournament()
     if not t:
         await update.message.reply_text("❌ No active tournament.")
         return
-
     if action == "info":
         await _send_tournament_info(context.bot, user.id, t)
-    elif action == "announce":
+    elif action in ("announce", "announch"):
         text = (
             f"🏆 <b>{escape(t['title'])}</b> 🏆\n\n"
             f"🎁 <b>PRIZE:</b> {escape(t.get('prize') or 'TBA')}\n"
-            f"⏰ <b>START:</b> {escape(_fmt_start(t.get('start_at')))}\n"
+            f"📅 <b>DATE & TIME:</b> {escape(_fmt_start(t.get('start_at')))}\n"
             f"👥 <b>PLAYERS:</b> {len(t.get('players', []))}/{t.get('max_players') or '∞'}\n\n"
             f"📜 <b>RULES</b>\n{escape(t.get('rules') or 'Single elimination.')}\n\n"
-            f"1️⃣ Join the official Telegram group.\n"
-            f"2️⃣ Open the bot in DM.\n"
-            f"3️⃣ Send <code>/join</code>.\n\n"
-            f"🎮 The bot automatically shuffles players and creates every 2-player Bingo room."
+            "Tap the button below to join the tournament."
         )
-        if TOURNAMENT_GROUP_LINK:
-            text += f"\n\n🔗 {escape(TOURNAMENT_GROUP_LINK)}"
-        await context.bot.send_message(chat_id=t["group_id"], text=text, parse_mode="HTML")
-        await update.message.reply_text("📢 Tournament announcement sent to the official group.")
+        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🏆 Join Tournament", callback_data=f"tjoin:{t['id']}")]])
+        await context.bot.send_message(chat_id=t["group_id"], text=text, parse_mode="HTML", reply_markup=keyboard)
+        await update.message.reply_text("📢 Tournament announcement sent with the Join Tournament button.")
     elif action == "start":
         await start_tournament(context, t)
         await update.message.reply_text("🚀 Tournament start command processed.")
@@ -149,6 +151,134 @@ async def cmd_tournament(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🛑 Tournament cancelled.")
     else:
         await update.message.reply_text("Unknown action. Use /tournament for the control panel.")
+
+
+async def _create_from_draft(update, context):
+    d = _draft(context)
+    missing = [label for key, label in [("title","Name"),("prize","Prize"),("max_players","Maximum Players"),("start_at","Date & Time"),("rules","Rules")] if not str(d.get(key) or '').strip()]
+    if missing:
+        await update.effective_message.reply_text("❌ Please complete: " + ", ".join(missing))
+        return
+    try:
+        max_players = int(d["max_players"])
+        if max_players < 2:
+            raise ValueError
+    except ValueError:
+        await update.effective_message.reply_text("❌ Maximum players must be a number of at least 2.")
+        return
+    if not TOURNAMENT_GROUP_ID:
+        await update.effective_message.reply_text("❌ TOURNAMENT_GROUP_ID is not configured.")
+        return
+    t = await db.create_tournament(d["title"], d["prize"], d["start_at"], max_players, d["rules"], TOURNAMENT_GROUP_ID)
+    context.user_data.pop("tournament_draft", None)
+    context.user_data.pop("tournament_waiting_field", None)
+    await update.effective_message.reply_text(f"✅ Tournament created: <b>{escape(t['title'])}</b>\n\nUse /tournament announce to publish it.", parse_mode="HTML")
+
+
+async def handle_tournament_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    data = query.data or ""
+    if data.startswith("tcreate:"):
+        if not _is_owner(query.from_user.id):
+            await query.answer("Only the bot owner can use the tournament creator.", show_alert=True)
+            return
+        action = data.split(":", 1)[1]
+        if action == "cancel":
+            context.user_data.pop("tournament_draft", None)
+            context.user_data.pop("tournament_waiting_field", None)
+            await query.edit_message_text("❌ Tournament creation cancelled.")
+            await query.answer()
+            return
+        if action == "preview":
+            d = _draft(context)
+            await query.answer()
+            await query.message.reply_text(_draft_text(d), parse_mode="HTML")
+            return
+        if action == "create":
+            await query.answer()
+            await _create_from_draft(update, context)
+            return
+        context.user_data["tournament_waiting_field"] = action
+        labels = {"title":"tournament name", "prize":"prize", "max_players":"maximum players", "start_at":"date and time of the match", "rules":"rules"}
+        await query.answer()
+        await query.message.reply_text(f"✍️ Send the <b>{labels[action]}</b> now.", parse_mode="HTML")
+        return
+    if data.startswith("tjoin:"):
+        tid = data.split(":", 1)[1]
+        t = await db.get_tournament(tid)
+        if not t or t.get("status") != "registration":
+            await query.answer("Tournament registration is closed.", show_alert=True)
+            return
+        uid = query.from_user.id
+        if uid in t.get("players", []):
+            await query.answer(f"Already joined! {len(t.get('players', []))}/{t.get('max_players') or '∞'}", show_alert=True)
+            return
+        max_players = t.get("max_players")
+        if max_players and len(t.get("players", [])) >= max_players:
+            await query.answer("Tournament is full.", show_alert=True)
+            return
+        await db.create_user(uid, query.from_user.username, query.from_user.first_name)
+        ok = await db.add_tournament_player(tid, uid, max_players)
+        if not ok:
+            await query.answer("Could not join. Please try again.", show_alert=True)
+            return
+        count = len(t.get("players", [])) + 1
+        await query.answer(f"Successfully joined! {count}/{max_players or '∞'}", show_alert=True)
+        name = display_name_from_db({"first_name": query.from_user.first_name or "", "username": query.from_user.username or ""})
+        username = f"@{query.from_user.username}" if query.from_user.username else "No username"
+        try:
+            await context.bot.send_message(chat_id=t["group_id"], text=(
+                "🎟️ <b>New Tournament Player Joined!</b>\n\n"
+                f"👤 <b>Name:</b> {escape(name)}\n"
+                f"🔗 <b>Username:</b> {escape(username)}\n"
+                f"🆔 <b>User ID:</b> <code>{uid}</code>\n"
+                f"👥 <b>Joined:</b> {count}/{max_players or '∞'}"
+            ), parse_mode="HTML")
+        except Exception:
+            pass
+
+
+async def capture_tournament_creator_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    field = context.user_data.get("tournament_waiting_field")
+    if not field or not update.message or not update.message.text:
+        return
+    if update.effective_user.id != OWNER_ID or update.effective_chat.type != "private":
+        return
+    value = update.message.text.strip()
+    if value.startswith("/"):
+        return
+    _draft(context)[field] = value
+    context.user_data.pop("tournament_waiting_field", None)
+    await update.message.reply_text("✅ Saved. You can continue editing or preview/create the tournament.", reply_markup=_draft_keyboard())
+
+
+async def cmd_disqualify(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_owner(update.effective_user.id):
+        await update.message.reply_text("🚫 Only the bot owner can disqualify players.")
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: /disqualify @username")
+        return
+    t = await _active_tournament()
+    if not t:
+        await update.message.reply_text("❌ No active tournament.")
+        return
+    if t.get("status") != "registration":
+        await update.message.reply_text("❌ Disqualification is available before the tournament starts.")
+        return
+    raw = context.args[0].strip()
+    username = raw[1:] if raw.startswith("@") else raw
+    player = await db.find_user_by_username(username)
+    if not player:
+        await update.message.reply_text("❌ Username not found.")
+        return
+    if player["telegram_id"] not in t.get("players", []):
+        await update.message.reply_text("❌ That user is not registered in this tournament.")
+        return
+    if not await db.remove_tournament_player(t["id"], player["telegram_id"]):
+        await update.message.reply_text("❌ Could not disqualify the player.")
+        return
+    await update.message.reply_text(f"🚫 Disqualified @{escape(username)} from the tournament.", parse_mode="HTML")
 
 
 async def cmd_join_tournament(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -262,8 +392,9 @@ async def cmd_round(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⏳ Some matches have not finished yet.")
         return
 
+    # Odd-player BYEs are eliminated with the configured 5,000 coin reward,
+    # so only actual match winners advance to the next round.
     next_players = [m["winner"] for m in current_data.get("matches", []) if m.get("winner")]
-    next_players.extend(current_data.get("byes", []))
     if len(next_players) == 1:
         await _finish_tournament(context, t, next_players[0])
         await update.message.reply_text("🏆 The tournament has a champion!")
@@ -313,13 +444,35 @@ async def _create_round(context, tournament_id, round_no, players):
     await db.append_tournament_round(tournament_id, round_no, matches, byes)
     await db.update_tournament(tournament_id, current_round=round_no)
     if byes:
+        # Tournament rule: when a round has an odd number of players, the one
+        # unpaired player receives a BYE reward and is eliminated instead of
+        # advancing. This prevents an automatic free advancement.
         names = []
         for pid in byes:
             p = await db.get_user(pid)
-            names.append(display_name_from_db(p) if p else str(pid))
+            name = display_name_from_db(p) if p else str(pid)
+            names.append(name)
+            await db.add_coins(pid, 5000)
+            try:
+                await context.bot.send_message(
+                    chat_id=pid,
+                    text=(
+                        f"🎟️ <b>Tournament BYE — Round {round_no}</b>\n\n"
+                        f"Because the number of players is odd, you were selected as the unpaired player.\n"
+                        f"❌ You are eliminated from this tournament round.\n"
+                        f"💰 <b>Compensation:</b> +5,000 Bingo Coins"
+                    ),
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
         await context.bot.send_message(
             chat_id=tournament["group_id"],
-            text=f"🎟️ <b>Round {round_no} BYE:</b> {escape(', '.join(names))}\nThey advance automatically to the next round.",
+            text=(
+                f"🎟️ <b>Round {round_no} BYE / Elimination:</b> {escape(', '.join(names))}\n\n"
+                f"Because the player count is odd, the unpaired player is removed from the tournament and receives "
+                f"💰 <b>5,000 Bingo Coins</b>."
+            ),
             parse_mode="HTML",
         )
 

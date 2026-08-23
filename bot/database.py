@@ -430,6 +430,14 @@ async def add_tournament_player(tournament_id: str, player_id: int, max_players:
     return result.modified_count > 0
 
 
+async def remove_tournament_player(tournament_id: str, player_id: int) -> bool:
+    result = await _col("tournaments").update_one(
+        {"_id": _oid(tournament_id), "status": "registration", "players": player_id},
+        {"$pull": {"players": player_id}},
+    )
+    return result.modified_count > 0
+
+
 async def append_tournament_round(tournament_id: str, round_no: int, matches: list, byes: list):
     await _col("tournaments").update_one(
         {"_id": _oid(tournament_id)},
