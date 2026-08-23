@@ -602,13 +602,6 @@ async def handle_bingo_win(context, room, winner_id, p1, p2, called):
     winner_name = display_name_from_db(winner)
     loser_name = display_name_from_db(loser)
 
-    if room.get("tournament_id"):
-        try:
-            from tournament import handle_tournament_match_result
-            await handle_tournament_match_result(context, room, winner_id)
-        except Exception as exc:
-            _log(context, f"⚠️ Tournament update failed: {exc}")
-
     win_text = (
         f"🏆 <b>BINGO!</b>\n\n"
         f"🥇 Winner: <b>{winner_name}</b>\n"
@@ -618,7 +611,7 @@ async def handle_bingo_win(context, room, winner_id, p1, p2, called):
         f"📋 Numbers called: {format_called_numbers(called)}"
     )
 
-    rematch_kb = None if room.get("tournament_id") else InlineKeyboardMarkup([[
+    rematch_kb = InlineKeyboardMarkup([[
         InlineKeyboardButton("🔄 Rematch!", callback_data=f"rematch:{room['id']}")
     ]])
 

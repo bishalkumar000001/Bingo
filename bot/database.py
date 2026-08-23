@@ -454,3 +454,39 @@ async def set_tournament_match_winner(tournament_id: str, room_id: str, winner_i
         }},
         array_filters=[{"match.room_id": room_id}],
     )
+
+# ── Simple tournament registration ───────────────────────────────────────────
+async def create_active_tournament(source_chat_id: int, source_message_id: int, max_players: int = 64):
+    await _col("simple_tournament_players").delete_many({})
+    await _col("simple_tournament").update_one(
+        {"key": "active"},
+        {"$set": {"key": "active", "status": "active", "source_chat_id": source_chat_id,
+                  "source_message_id": source_message_id, "max_players": max_players,
+                  "created_at": datetime.now(timezone.utc)}}, upsert=True)
+
+async def get_active_tournament():
+    return _to_dict(await _col("simple_tournament").find_one({"key": "active", "status": "active"}))
+
+async def join_active_tournament(telegram_id: int, username: str, first_name: str, max_players: int = 64):
+    t = await get_active_tournament()
+    if not t:
+        return {"status": "inactive", "count": 0}
+    existing = await _col("simple_tournament_players").find_one({"telegram_id": telegram_id})
+    count = await _col("simple_tournament_players").count_documents({})
+    if existing:
+        return {"status": "already", "count": count}
+    if count >= max_players:
+        return {"status": "full", "count": count}
+    await _col("simple_tournament_players").insert_one({
+        "telegram_id": telegram_id, "username": username, "first_name": first_name,
+        "joined_at": datetime.now(timezone.utc), "number": count + 1
+    })
+    return {"status": "joined", "count": count + 1}
+
+async def get_tournament_players(tournament_id: str = ""):
+    cursor = _col("simple_tournament_players").find({}).sort("number", 1)
+    return [dict(x) async for x in cursor]
+
+async def cancel_active_tournament():
+    await _col("simple_tournament").update_one({"key": "active"}, {"$set": {"status": "cancelled"}})
+    await _col("simple_tournament_players").delete_many({})

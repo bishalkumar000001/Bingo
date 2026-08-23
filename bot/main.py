@@ -27,8 +27,8 @@ from game import (
 )
 from economy import award_winner, record_loss, process_forfeit
 from leaderboard import build_leaderboard_text, build_leaderboard_keyboard
+from tournament import cmd_tournament, cmd_announce_tournament, cmd_playerlist, cmd_cancel_tournament, handle_tournament_join
 from utils import display_name_from_db, display_name
-from tournament import cmd_tournament, cmd_join_tournament, cmd_round, cmd_disqualify, handle_tournament_callback, capture_tournament_creator_input
 from models import LINES_TO_WIN, WIN_COINS, FORFEIT_COST, CANCEL_FREE_THRESHOLD, OWNER_ID, LOGGER_GROUP_ID, SUPPORT_CHANNEL
 
 logging.basicConfig(
@@ -60,20 +60,9 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/leaderboard — See top players\n"
         "/give — Transfer coins to another player\n"
         "/stopbingo — Cancel all rooms (admins only)\n"
-        "/join — Join the active tournament (DM only)\n"
-        "/tournamentinfo — View tournament information\n\n"
         "✅ You're registered! Go add me to a group and start playing.",
         parse_mode="HTML",
     )
-
-
-async def cmd_tournamentinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    t = await db.get_active_tournament()
-    if not t:
-        await update.message.reply_text("❌ No active tournament right now.")
-        return
-    from tournament import _send_tournament_info
-    await _send_tournament_info(context.bot, update.effective_chat.id, t)
 
 
 async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -534,9 +523,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
 
-    if data.startswith("tcreate:") or data.startswith("tjoin:"):
-        await handle_tournament_callback(update, context)
-    elif data.startswith("join:"):
+    if data == "tournament_join":
+        await handle_tournament_join(update, context)
+        return
+
+    if data.startswith("join:"):
         await handle_join_callback(update, context)
     elif data.startswith("cancel_room:"):
         await handle_cancel_room_callback(update, context)
@@ -581,16 +572,14 @@ def main():
     app.add_handler(CommandHandler("profile", cmd_profile))
     app.add_handler(CommandHandler("leaderboard", cmd_leaderboard))
     app.add_handler(CommandHandler("stopbingo", cmd_stopbingo))
-    app.add_handler(CommandHandler("join", cmd_join_tournament))
-    app.add_handler(CommandHandler("tournament", cmd_tournament))
-    app.add_handler(CommandHandler("disqualify", cmd_disqualify))
-    app.add_handler(CommandHandler("tournamentinfo", cmd_tournamentinfo))
-    app.add_handler(CommandHandler("round", cmd_round))
     app.add_handler(CommandHandler("broadcast", cmd_broadcast))
+    app.add_handler(CommandHandler("tournament", cmd_tournament))
+    app.add_handler(CommandHandler("announce", cmd_announce_tournament))
+    app.add_handler(CommandHandler("playerlist", cmd_playerlist))
+    app.add_handler(CommandHandler("cancel_tournament", cmd_cancel_tournament))
     app.add_handler(CommandHandler("give", cmd_give))
     app.add_handler(ChatMemberHandler(handle_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
     app.add_handler(CallbackQueryHandler(handle_callback))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, capture_tournament_creator_input), group=-1)
 
     logger.info("🎮 Velocity Bingo Bot is starting...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
