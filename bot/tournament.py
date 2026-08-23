@@ -816,9 +816,52 @@ async def _finish_match(context, room_id, winner_id, reason):
     await db.update_tournament_match(room_id,status='finished',winner_id=winner_id,loser_id=loser,finish_reason=reason,finished_at=datetime.now(timezone.utc))
     t=await db.get_tournament(room['tournament_id'])
     wp=await db.get_user(winner_id); lp=await db.get_user(loser)
-    text=f"🏆 <b>Match #{room['match_number']} finished!</b>\n\n🥇 Winner: <b>{display_name_from_db(wp)}</b>\n😔 Eliminated: <b>{display_name_from_db(lp)}</b>\n\n➡️ Winner advances to the next round."
+    winner_name = display_name_from_db(wp)
+    loser_name = display_name_from_db(lp)
+
+    text=f"🏆 <b>Match #{room['match_number']} finished!</b>\n\n🥇 Winner: <b>{winner_name}</b>\n😔 Eliminated: <b>{loser_name}</b>\n\n➡️ Winner advances to the next round."
     try: await context.bot.send_message(TOURNAMENT_GROUP_ID,text,parse_mode='HTML')
     except Exception: pass
+
+    # Same result experience as a normal Bingo game: when BINGO ends the
+    # match, both players immediately receive a final result in DM. Prefer
+    # replacing the live card message so the player does not have to search
+    # through old card messages; fall back to a new DM if the old one cannot
+    # be edited.
+    for pid in (winner_id, loser):
+        is_winner = pid == winner_id
+        result = (
+            "🏆 <b>You won this tournament match!</b>\n➡️ You advance to the next round."
+            if is_winner else
+            "😔 <b>You lost this tournament match.</b>\nThanks for playing."
+        )
+        final_dm = (
+            f"🏁 <b>Tournament Match Over — Match #{room['match_number']}</b>\n"
+            f"🏆 <b>{_esc(t['name'])}</b> — Round {room['round']}\n\n"
+            f"{result}\n\n"
+            f"🥇 Winner: <b>{winner_name}</b>\n"
+            f"😔 Eliminated: <b>{loser_name}</b>"
+        )
+        try:
+            card = await db.get_tournament_card(room_id, pid)
+            mid = card.get('card_message_id') if card else None
+            if mid:
+                try:
+                    await context.bot.edit_message_text(
+                        chat_id=pid,
+                        message_id=mid,
+                        text=final_dm,
+                        parse_mode='HTML',
+                    )
+                except BadRequest:
+                    await context.bot.send_message(pid, final_dm, parse_mode='HTML')
+            else:
+                await context.bot.send_message(pid, final_dm, parse_mode='HTML')
+        except (Forbidden, BadRequest):
+            pass
+        except Exception:
+            pass
+
     await _maybe_advance_round(context,room['tournament_id'],room['round'])
 
 
@@ -883,8 +926,17 @@ async def _maybe_advance_round(context, tid, round_no):
         if winners:
             await db.update_tournament(tid,status='finished',winner_id=winners[0])
             p=await db.get_user(winners[0])
-            text=f"🏆 <b>TOURNAMENT CHAMPION</b> 🏆\n\n🥇 <b>{display_name_from_db(p)}</b>\n🎁 Prize: <b>{_esc(t['prize'])}</b>"
+            champion_name = display_name_from_db(p)
+            text=f"🏆 <b>TOURNAMENT CHAMPION</b> 🏆\n\n🥇 <b>{champion_name}</b>\n🎁 Prize: <b>{_esc(t['prize'])}</b>"
             await context.bot.send_message(TOURNAMENT_GROUP_ID,text,parse_mode='HTML')
+            try:
+                await context.bot.send_message(
+                    winners[0],
+                    f"🏆 <b>CONGRATULATIONS!</b> 🏆\n\nYou are the champion of <b>{_esc(t['name'])}</b>!\n\n🥇 Champion: <b>{champion_name}</b>\n🎁 Prize: <b>{_esc(t['prize'])}</b>",
+                    parse_mode='HTML',
+                )
+            except Exception:
+                pass
             if TOURNAMENT_CHANNEL:
                 try: await context.bot.send_message(TOURNAMENT_CHANNEL,text,parse_mode='HTML')
                 except Exception: pass
