@@ -9,10 +9,12 @@ from telegram.error import BadRequest, Forbidden
 from telegram.ext import ContextTypes
 
 import database as db
-from models import OWNER_IDS, TOURNAMENT_GROUP_ID, TOURNAMENT_CHANNEL, OWNER_CONTACT_URL
+from models import OWNER_IDS, TOURNAMENT_GROUP_ID, TOURNAMENT_CHANNEL, OWNER_CONTACT_URL, SUPPORT_CHANNEL
 from utils import display_name, display_name_from_db
+from cards import build_dm_card_text
 
 TOURNAMENT_LOCKS = defaultdict(asyncio.Lock)
+ROUND_LAUNCH_TASKS = {}
 WIZARDS: Dict[int, dict] = {}
 
 
@@ -158,7 +160,7 @@ async def handle_tournament_wizard_callback(update: Update, context: ContextType
             await q.edit_message_text(
                 f"✅ <b>Tournament created!</b>\n\n{_field_text({**t, 'players': []})}\n\n🆔 <code>{tid}</code>",
                 parse_mode='HTML',
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('📣 Announce Now', callback_data=f'tann:{tid}')], [InlineKeyboardButton('▶️ Start Tournament', callback_data=f'tstart:{tid}')]])
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('📣 Announce Manually', callback_data=f'tann:{tid}')], [InlineKeyboardButton('▶️ Start Tournament', callback_data=f'tstart:{tid}')]])
             )
             await q.answer('Created.')
             return
@@ -338,64 +340,100 @@ async def handle_announce_callback(update: Update, context: ContextTypes.DEFAULT
     await q.answer(f'Sent to {sent} targets; {failed} failed.', show_alert=True)
 
 
-async def handle_tournament_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    uid = q.from_user.id
-    tid = q.data.split(':', 1)[1]
+async def _register_free_tournament_player(context: ContextTypes.DEFAULT_TYPE, tid: str, uid: int, username: str, first_name: str):
+    """Register a player in a free tournament and return (ok, message, registration_no, tournament)."""
     t = await db.get_tournament(tid)
-    if not t or t['status'] != 'registration':
-        await q.answer('Tournament is not accepting registrations.', show_alert=True); return
+    if not t:
+        return False, '❌ Tournament ID not found.', None, None
+    if t.get('status') != 'registration':
+        return False, '❌ Tournament is not accepting registrations.', None, t
+    if t.get('type') != 'free':
+        return False, '❌ This is a paid tournament. Contact the owner to register.', None, t
+
     if not await db.get_user(uid):
-        await db.create_user(uid, q.from_user.username or '', q.from_user.first_name or '')
-    if t['type'] != 'free':
-        await q.answer('Paid tournament players are registered manually by the owner.', show_alert=True); return
-    if uid in t.get('players', []):
-        await q.answer('You are already registered.', show_alert=True); return
-    if len(t.get('players', [])) >= t['max_players']:
-        await q.answer('Tournament is full.', show_alert=True); return
+        await db.create_user(uid, username or '', first_name or '')
+
+    players = list(t.get('players', []))
+    if uid in players:
+        registration_no = players.index(uid) + 1
+        return False, f'ℹ️ You are already registered: {registration_no}/{t.get("max_players", 0)}', registration_no, t
+    if len(players) >= int(t.get('max_players', 0)):
+        return False, '❌ Tournament is full.', None, t
+
     registration_no = await db.add_tournament_player(tid, uid)
     if registration_no is None:
-        # A concurrent click may have registered the player first.
         latest = await db.get_tournament(tid)
         current_players = list(latest.get('players', [])) if latest else []
         if uid in current_players:
             registration_no = current_players.index(uid) + 1
-            await q.answer(f'✅ You are already registered: {registration_no}/{len(current_players)}', show_alert=True)
-        else:
-            await q.answer('❌ Registration failed. Please try again.', show_alert=True)
-        return
+            return False, f'ℹ️ You are already registered: {registration_no}/{latest.get("max_players", 0)}', registration_no, latest
+        return False, '❌ Registration failed. Please try again.', None, latest
 
     latest = await db.get_tournament(tid) or t
-    total_registered = len(latest.get('players', []))
-    name = display_name(q.from_user)
-    username = f'@{q.from_user.username}' if q.from_user.username else 'No username'
+    return True, f'🎉 Successfully joined!\nRegistration: {registration_no}/{latest.get("max_players", 0)}', registration_no, latest
 
-    # Telegram popup shown immediately after the Join button is pressed.
-    await q.answer(
-        f'🎉 Successfully joined!\nRegistration: {registration_no}/{t["max_players"]}',
-        show_alert=True,
+
+async def _post_tournament_registration(context: ContextTypes.DEFAULT_TYPE, t: dict, uid: int, username: str, first_name: str, registration_no: int):
+    if not TOURNAMENT_CHANNEL:
+        return
+    total_registered = len(t.get('players', []))
+    name = first_name or username or str(uid)
+    username_text = f'@{username}' if username else 'No username'
+    try:
+        await context.bot.send_message(
+            TOURNAMENT_CHANNEL,
+            f'🎟️ <b>PLAYER REGISTERED</b>\n\n'
+            f'🏆 Tournament: <b>{_esc(t.get("name", "Tournament"))}</b>\n'
+            f'🔢 Registration No.: <b>{registration_no}/{t.get("max_players", 0)}</b>\n'
+            f'👤 Name: <b>{_esc(name)}</b>\n'
+            f'🔗 Username: <b>{_esc(username_text)}</b>\n'
+            f'🆔 Telegram ID: <code>{uid}</code>\n'
+            f'👥 Registered Players: <b>{total_registered}/{t.get("max_players", 0)}</b>',
+            parse_mode='HTML',
+        )
+    except Exception:
+        pass
+
+
+async def cmd_tjoin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Allow players to register for a FREE tournament directly with its tournament ID."""
+    if not context.args:
+        await update.message.reply_text('Usage: <code>/tjoin TOURNAMENT_ID</code>\n\nExample: <code>/tjoin abc123</code>', parse_mode='HTML')
+        return
+
+    tid = context.args[0].strip()
+    user = update.effective_user
+    ok, message, registration_no, t = await _register_free_tournament_player(
+        context, tid, user.id, user.username or '', user.first_name or ''
     )
+    await update.message.reply_text(message)
+    if ok:
+        await _post_tournament_registration(
+            context, t, user.id, user.username or '', user.first_name or '', registration_no
+        )
+
+
+async def handle_tournament_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    uid = q.from_user.id
+    tid = q.data.split(':', 1)[1]
+
+    ok, message, registration_no, latest = await _register_free_tournament_player(
+        context, tid, uid, q.from_user.username or '', q.from_user.first_name or ''
+    )
+    if not ok:
+        await q.answer(message, show_alert=True)
+        return
+
+    await q.answer(message, show_alert=True)
     try:
         await q.edit_message_reply_markup(reply_markup=await _announcement_keyboard(latest))
     except Exception:
         pass
 
-    # Official channel gets the full registration details and live count.
-    if TOURNAMENT_CHANNEL:
-        try:
-            await context.bot.send_message(
-                TOURNAMENT_CHANNEL,
-                f'🎟️ <b>PLAYER REGISTERED</b>\n\n'
-                f'🏆 Tournament: <b>{_esc(t["name"])}</b>\n'
-                f'🔢 Registration No.: <b>{registration_no}/{t["max_players"]}</b>\n'
-                f'👤 Name: <b>{_esc(name)}</b>\n'
-                f'🔗 Username: <b>{_esc(username)}</b>\n'
-                f'🆔 Telegram ID: <code>{uid}</code>\n'
-                f'👥 Registered Players: <b>{total_registered}/{t["max_players"]}</b>',
-                parse_mode='HTML',
-            )
-        except Exception:
-            pass
+    await _post_tournament_registration(
+        context, latest, uid, q.from_user.username or '', q.from_user.first_name or '', registration_no
+    )
 
 
 async def cmd_tadd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -477,67 +515,182 @@ async def _players_text(context, ids: List[int]) -> List[str]:
 
 
 async def _start_match(context, tid: str, round_no: int, match: dict):
-    # Always use the canonical MongoDB match document.  Older tournament
-    # documents can have a different/partial shape, so never trust the
-    # in-memory object passed by the launcher for player fields.
+    """Start one tournament room using the same game flow as normal Bingo.
+
+    Tournament rooms intentionally bypass MAX_ROOMS_PER_CHAT.  The tournament
+    launcher is the only limiter and starts rooms with its configured gap.
+    """
     room_id = match.get('id')
     room = await db.get_tournament_match(room_id) if room_id else None
     if not room or room.get('p1') is None or room.get('p2') is None:
-        # A stale/malformed match must never crash the whole tournament.
         if room_id:
             await db.update_tournament_match(room_id, status='invalid')
         return
+
     p1, p2 = room['p1'], room['p2']
-    names = await _players_text(context, [p1, p2])
-    msg = await context.bot.send_message(
-        chat_id=TOURNAMENT_GROUP_ID,
-        text=f"🏆 <b>{_esc((await db.get_tournament(tid))['name'])}</b> — Round {round_no}\n\n🎮 Match <b>#{room.get('match_number', 0)}</b>\n👤 {names[0]}\n⚔️ {names[1]}\n\n⏳ Starting...",
-        parse_mode='HTML'
-    )
-    await db.update_tournament_match(room_id, group_message_id=msg.message_id)
-    await asyncio.sleep(3)
+    # Do not send a separate "Starting..." message. The first normal-style
+    # match panel is the only live status message for this room.
     await db.update_tournament_match(room_id, status='playing', current_turn=p1, phase='call')
+
     existing1 = await db.get_tournament_card(room_id, p1)
     existing2 = await db.get_tournament_card(room_id, p2)
     if not existing1:
-        await db.create_tournament_card(room_id, p1, random.sample(range(1,26),25))
+        await db.create_tournament_card(room_id, p1, random.sample(range(1, 26), 25))
     if not existing2:
-        await db.create_tournament_card(room_id, p2, random.sample(range(1,26),25))
-    await _send_tournament_card(context, room_id, p1)
-    await _send_tournament_card(context, room_id, p2)
-    await _send_match_panel(context, room_id)
+        await db.create_tournament_card(room_id, p2, random.sample(range(1, 26), 25))
+
+    # Same as a normal room: private cards + one live group status panel.
+    await asyncio.gather(
+        _send_tournament_card(context, room_id, p1),
+        _send_tournament_card(context, room_id, p2),
+        _send_match_panel(context, room_id),
+    )
 
 
 async def _send_match_panel(context, room_id):
-    room=await db.get_tournament_match(room_id)
-    t=await db.get_tournament(room['tournament_id'])
-    p1=await db.get_user(room['p1']); p2=await db.get_user(room['p2'])
-    text=f"🏆 <b>{_esc(t['name'])}</b>\n🎮 Match #{room['match_number']}\n\n👤 {display_name_from_db(p1)}\n⚔️ {display_name_from_db(p2)}\n\n🎯 Turn: <b>{display_name_from_db(p1 if room['current_turn']==room['p1'] else p2)}</b>\n"
-    kb=[]
-    if _is_owner(OWNER_IDS.__iter__().__next__() if OWNER_IDS else 0):
-        kb=[[InlineKeyboardButton('🚫 DQ Player 1',callback_data=f'tdq:{room_id}:{room["p1"]}'), InlineKeyboardButton('🚫 DQ Player 2',callback_data=f'tdq:{room_id}:{room["p2"]}')]]
-    if room.get('group_message_id'):
-        try: await context.bot.edit_message_text(chat_id=TOURNAMENT_GROUP_ID,message_id=room['group_message_id'],text=text,parse_mode='HTML',reply_markup=InlineKeyboardMarkup(kb) if kb else None)
-        except Exception: pass
+    """Send a concise live panel, then delete the previous panel in background."""
+    room = await db.get_tournament_match(room_id)
+    if not room:
+        return
+    t = await db.get_tournament(room['tournament_id'])
+    p1 = await db.get_user(room['p1'])
+    p2 = await db.get_user(room['p2'])
+    p1_name = display_name_from_db(p1)
+    p2_name = display_name_from_db(p2)
+
+    called = room.get('called_numbers', [])
+    called_text = ' • '.join(str(n) for n in called[-12:]) or 'None'
+    last = room.get('last_called') or 'None'
+    phase = room.get('phase', 'call')
+    turn_id = room.get('current_turn')
+    turn_name = p1_name if turn_id == room['p1'] else p2_name
+
+    if phase == 'call':
+        status = f'🎯 <b>{_esc(turn_name)}</b> — your turn to call.'
+    else:
+        marker_id = room.get('marker_id')
+        marker_name = p1_name if marker_id == room['p1'] else p2_name
+        status = f'⚡ <b>{_esc(marker_name)}</b> — mark <b>{last}</b>.'
+
+    text = (
+        f'🏆 <b>{_esc(t["name"])}</b> — Match #{room["match_number"]}\n\n'
+        f'👤 {p1_name}\n'
+        f'👤 {p2_name}\n\n'
+        f'📢 Last: <b>{last}</b>\n'
+        f'📋 Called: <b>{called_text}</b>\n\n'
+        f'{status}'
+    )
+
+    rows = [[InlineKeyboardButton('📩 Open My Card', url=f'https://t.me/{context.bot.username}')]]
+    # Owner DQ controls remain available but the panel itself stays concise.
+    rows.append([
+        InlineKeyboardButton('🚫 DQ 1', callback_data=f'tdq:{room_id}:{room["p1"]}'),
+        InlineKeyboardButton('🚫 DQ 2', callback_data=f'tdq:{room_id}:{room["p2"]}'),
+    ])
+    if SUPPORT_CHANNEL:
+        rows.append([InlineKeyboardButton('📢 Support Channel', url=SUPPORT_CHANNEL)])
+
+    old_mid = room.get('group_message_id')
+    try:
+        # Same fast normal-game UX: send newest first, then delete old in the
+        # background. Deletion never blocks a number click.
+        msg = await context.bot.send_message(
+            chat_id=TOURNAMENT_GROUP_ID,
+            text=text,
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup(rows),
+        )
+        await db.update_tournament_match(room_id, group_message_id=msg.message_id)
+        if old_mid and old_mid != msg.message_id:
+            async def _delete_old(mid=old_mid):
+                try:
+                    await context.bot.delete_message(chat_id=TOURNAMENT_GROUP_ID, message_id=mid)
+                except Exception:
+                    pass
+            asyncio.create_task(_delete_old())
+    except Exception:
+        pass
+
+
+def _tournament_card_keyboard(room_id, numbers, marked, last_called, is_my_turn_to_call, need_to_mark):
+    rows = []
+    marked_set = set(marked or [])
+    for r in range(5):
+        row = []
+        for c in range(5):
+            n = numbers[r * 5 + c]
+            if n in marked_set:
+                label = f'✅{n}'
+            elif n == last_called and need_to_mark:
+                label = f'⚡{n}'
+            else:
+                label = str(n)
+            row.append(InlineKeyboardButton(label, callback_data=f'tcard:{room_id}:{n}'))
+        rows.append(row)
+    return InlineKeyboardMarkup(rows)
 
 
 async def _send_tournament_card(context, room_id, uid):
-    card=await db.get_tournament_card(room_id,uid)
-    if not card: return
-    buttons=[]
-    marked=set(card.get('marked_numbers',[]))
-    for r in range(5):
-        row=[]
-        for c in range(5):
-            n=card['numbers'][r*5+c]
-            label=f'✅ {n}' if n in marked else str(n)
-            row.append(InlineKeyboardButton(label,callback_data=f'tcard:{room_id}:{n}'))
-        buttons.append(row)
-    room=await db.get_tournament_match(room_id)
-    try:
-        await context.bot.send_message(uid,'🎴 <b>Your tournament Bingo card</b>',parse_mode='HTML',reply_markup=InlineKeyboardMarkup(buttons))
-    except Exception: pass
+    """Use the same detailed private-card layout and update flow as normal Bingo."""
+    room = await db.get_tournament_match(room_id)
+    card = await db.get_tournament_card(room_id, uid)
+    if not room or not card:
+        return
 
+    other = room['p2'] if uid == room['p1'] else room['p1']
+    me = await db.get_user(uid)
+    opponent = await db.get_user(other)
+    player_name = display_name_from_db(me)
+    opponent_name = display_name_from_db(opponent)
+    phase = room.get('phase', 'call')
+    marker = room.get('marker_id')
+    is_my_turn_to_call = phase == 'call' and room.get('current_turn') == uid
+    need_to_mark = phase == 'mark' and marker == uid
+    last_called = room.get('last_called')
+
+    text = build_dm_card_text(
+        room_number=room.get('match_number', 0),
+        player_name=player_name,
+        opponent_name=opponent_name,
+        numbers=card['numbers'],
+        marked=card.get('marked_numbers', []),
+        completed_lines=card.get('completed_lines', 0),
+        called_numbers=room.get('called_numbers', []),
+        is_my_turn_to_call=is_my_turn_to_call,
+        need_to_mark=need_to_mark,
+        last_called=last_called,
+    )
+    kb = _tournament_card_keyboard(
+        room_id,
+        card['numbers'],
+        card.get('marked_numbers', []),
+        last_called,
+        is_my_turn_to_call,
+        need_to_mark,
+    )
+
+    mid = card.get('card_message_id')
+    try:
+        if mid:
+            await context.bot.edit_message_text(
+                chat_id=uid,
+                message_id=mid,
+                text=text,
+                parse_mode='HTML',
+                reply_markup=kb,
+            )
+            return
+    except BadRequest as exc:
+        if 'Message is not modified' in str(exc):
+            return
+    except Exception:
+        pass
+
+    try:
+        msg = await context.bot.send_message(uid, text, parse_mode='HTML', reply_markup=kb)
+        await db.update_tournament_card(card['id'], card_message_id=msg.message_id)
+    except Exception:
+        pass
 
 def _lines(numbers, marked):
     s=set(marked); count=0
@@ -547,33 +700,113 @@ def _lines(numbers, marked):
 
 
 async def handle_tournament_card(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q=update.callback_query; parts=q.data.split(':'); room_id=parts[1]; n=int(parts[2]); uid=q.from_user.id
-    if q.message.chat.type!='private': await q.answer('Open your private tournament card.',show_alert=True); return
-    room=await db.get_tournament_match(room_id)
-    if not room or room['status']!='playing' or uid not in (room['p1'],room['p2']): await q.answer('Match is not active.',show_alert=True); return
+    q = update.callback_query
+    parts = q.data.split(':')
+    if len(parts) != 3:
+        await q.answer()
+        return
+    room_id, n_raw = parts[1], parts[2]
+    try:
+        n = int(n_raw)
+    except ValueError:
+        await q.answer('Invalid number.', show_alert=True)
+        return
+    uid = q.from_user.id
+    if q.message.chat.type != 'private':
+        await q.answer('Open your private tournament card.', show_alert=True)
+        return
     async with TOURNAMENT_LOCKS[room_id]:
-        room=await db.get_tournament_match(room_id)
-        if room['phase']=='call':
-            if uid!=room['current_turn']: await q.answer('Not your turn.',show_alert=True); return
-            if n in room.get('called_numbers',[]): await q.answer('Already called.',show_alert=True); return
-            called=room.get('called_numbers',[])+[n]
-            marker=room['p2'] if uid==room['p1'] else room['p1']
-            await db.update_tournament_match(room_id,called_numbers=called,last_called=n,phase='mark',marker_id=marker)
-            await context.bot.send_message(TOURNAMENT_GROUP_ID,f'🎲 Match #{room["match_number"]}: <b>{n}</b> was called.',parse_mode='HTML')
-            await _send_tournament_card(context,room_id,marker)
+        room = await db.get_tournament_match(room_id)
+        if not room or room.get('status') != 'playing' or uid not in (room.get('p1'), room.get('p2')):
+            await q.answer('Match is not active.', show_alert=True)
+            return
+
+        phase = room.get('phase', 'call')
+        if phase == 'call':
+            if uid != room.get('current_turn'):
+                await q.answer('Not your turn.', show_alert=True)
+                return
+            new_room = await db.claim_tournament_call(room_id, uid, n)
+            if not new_room:
+                await q.answer('🚫 Number already called or turn changed.', show_alert=True)
+                return
+            room = new_room
+
+            # IMPORTANT: a player calling a number must also get that number
+            # marked on their own card immediately. The previous tournament
+            # implementation only changed the opponent into the marker, so a
+            # number such as 20 could be called by the current player and then
+            # remain unmarked forever on that player's own card.
+            caller = uid
+            opponent = room['p1'] if caller == room['p2'] else room['p2']
+            caller_card = await db.get_tournament_card(room_id, caller)
+            if caller_card and n not in caller_card.get('marked_numbers', []):
+                caller_marked = caller_card.get('marked_numbers', []) + [n]
+                caller_lines = _lines(caller_card['numbers'], caller_marked)
+                claimed = await db.claim_tournament_mark(
+                    caller_card['id'], n, caller_lines
+                )
+                if claimed:
+                    caller_card['marked_numbers'] = list(dict.fromkeys(caller_marked))
+                    caller_card['completed_lines'] = caller_lines
+
+                    # If the caller completes BINGO with the called number,
+                    # finish the match immediately instead of waiting for the
+                    # opponent's marking phase.
+                    if caller_lines >= 5:
+                        await _finish_match(context, room_id, caller, 'bingo')
+                        await q.answer('🏆 BINGO!')
+                        return
+
             await q.answer(f'📢 Called {n}!')
-            await _send_match_panel(context,room_id); return
-        if room['phase']=='mark':
-            if uid!=room.get('marker_id') or n!=room.get('last_called'): await q.answer('You must mark the called number.',show_alert=True); return
-            card=await db.get_tournament_card(room_id,uid)
-            if n in card.get('marked_numbers',[]): await q.answer('Already marked.',show_alert=True); return
-            marked=card.get('marked_numbers',[])+[n]
-            lines=_lines(card['numbers'],marked)
-            await db.update_tournament_card(card['id'],marked_numbers=marked,completed_lines=lines)
-            if lines>=5:
-                await _finish_match(context,room_id,uid,'bingo'); await q.answer('🏆 BINGO!'); return
-            await db.update_tournament_match(room_id,current_turn=uid,phase='call')
-            await q.answer(f'✅ Marked {n}!'); await _send_tournament_card(context,room_id,uid); await _send_match_panel(context,room_id)
+            # Refresh both cards and the group panel immediately. The caller
+            # now visibly has the called number marked, while the opponent is
+            # still prompted to mark the same called number if it is on their
+            # card.
+            await asyncio.gather(
+                _send_tournament_card(context, room_id, caller),
+                _send_tournament_card(context, room_id, opponent),
+                _send_match_panel(context, room_id),
+            )
+            return
+
+        if phase == 'mark':
+            marker = room.get('marker_id')
+            last = room.get('last_called')
+            if uid != marker or n != last:
+                await q.answer(f'You must mark the called number: {last}.', show_alert=True)
+                return
+            card = await db.get_tournament_card(room_id, uid)
+            if not card:
+                await q.answer('Card not found.', show_alert=True)
+                return
+            if n in card.get('marked_numbers', []):
+                await q.answer('Already marked.', show_alert=True)
+                return
+            marked = card.get('marked_numbers', []) + [n]
+            lines = _lines(card['numbers'], marked)
+            if not await db.claim_tournament_mark(card['id'], n, lines):
+                await q.answer('Already marked.', show_alert=True)
+                return
+            card['marked_numbers'] = list(dict.fromkeys(marked))
+            card['completed_lines'] = lines
+            if lines >= 5:
+                await _finish_match(context, room_id, uid, 'bingo')
+                await q.answer('🏆 BINGO!')
+                return
+            room = await db.transition_tournament_mark_to_call(room_id, uid)
+            if not room:
+                await q.answer('Match state changed. Try again.', show_alert=True)
+                return
+            await q.answer(f'✅ Marked {n}!')
+            await asyncio.gather(
+                _send_tournament_card(context, room_id, uid),
+                _send_tournament_card(context, room_id, room['p1'] if uid == room['p2'] else room['p2']),
+                _send_match_panel(context, room_id),
+            )
+            return
+
+    await q.answer()
 
 
 async def _finish_match(context, room_id, winner_id, reason):
@@ -583,9 +816,52 @@ async def _finish_match(context, room_id, winner_id, reason):
     await db.update_tournament_match(room_id,status='finished',winner_id=winner_id,loser_id=loser,finish_reason=reason,finished_at=datetime.now(timezone.utc))
     t=await db.get_tournament(room['tournament_id'])
     wp=await db.get_user(winner_id); lp=await db.get_user(loser)
-    text=f"🏆 <b>Match #{room['match_number']} finished!</b>\n\n🥇 Winner: <b>{display_name_from_db(wp)}</b>\n😔 Eliminated: <b>{display_name_from_db(lp)}</b>\n\n➡️ Winner advances to the next round."
+    winner_name = display_name_from_db(wp)
+    loser_name = display_name_from_db(lp)
+
+    text=f"🏆 <b>Match #{room['match_number']} finished!</b>\n\n🥇 Winner: <b>{winner_name}</b>\n😔 Eliminated: <b>{loser_name}</b>\n\n➡️ Winner advances to the next round."
     try: await context.bot.send_message(TOURNAMENT_GROUP_ID,text,parse_mode='HTML')
     except Exception: pass
+
+    # Same result experience as a normal Bingo game: when BINGO ends the
+    # match, both players immediately receive a final result in DM. Prefer
+    # replacing the live card message so the player does not have to search
+    # through old card messages; fall back to a new DM if the old one cannot
+    # be edited.
+    for pid in (winner_id, loser):
+        is_winner = pid == winner_id
+        result = (
+            "🏆 <b>You won this tournament match!</b>\n➡️ You advance to the next round."
+            if is_winner else
+            "😔 <b>You lost this tournament match.</b>\nThanks for playing."
+        )
+        final_dm = (
+            f"🏁 <b>Tournament Match Over — Match #{room['match_number']}</b>\n"
+            f"🏆 <b>{_esc(t['name'])}</b> — Round {room['round']}\n\n"
+            f"{result}\n\n"
+            f"🥇 Winner: <b>{winner_name}</b>\n"
+            f"😔 Eliminated: <b>{loser_name}</b>"
+        )
+        try:
+            card = await db.get_tournament_card(room_id, pid)
+            mid = card.get('card_message_id') if card else None
+            if mid:
+                try:
+                    await context.bot.edit_message_text(
+                        chat_id=pid,
+                        message_id=mid,
+                        text=final_dm,
+                        parse_mode='HTML',
+                    )
+                except BadRequest:
+                    await context.bot.send_message(pid, final_dm, parse_mode='HTML')
+            else:
+                await context.bot.send_message(pid, final_dm, parse_mode='HTML')
+        except (Forbidden, BadRequest):
+            pass
+        except Exception:
+            pass
+
     await _maybe_advance_round(context,room['tournament_id'],room['round'])
 
 
@@ -650,8 +926,17 @@ async def _maybe_advance_round(context, tid, round_no):
         if winners:
             await db.update_tournament(tid,status='finished',winner_id=winners[0])
             p=await db.get_user(winners[0])
-            text=f"🏆 <b>TOURNAMENT CHAMPION</b> 🏆\n\n🥇 <b>{display_name_from_db(p)}</b>\n🎁 Prize: <b>{_esc(t['prize'])}</b>"
+            champion_name = display_name_from_db(p)
+            text=f"🏆 <b>TOURNAMENT CHAMPION</b> 🏆\n\n🥇 <b>{champion_name}</b>\n🎁 Prize: <b>{_esc(t['prize'])}</b>"
             await context.bot.send_message(TOURNAMENT_GROUP_ID,text,parse_mode='HTML')
+            try:
+                await context.bot.send_message(
+                    winners[0],
+                    f"🏆 <b>CONGRATULATIONS!</b> 🏆\n\nYou are the champion of <b>{_esc(t['name'])}</b>!\n\n🥇 Champion: <b>{champion_name}</b>\n🎁 Prize: <b>{_esc(t['prize'])}</b>",
+                    parse_mode='HTML',
+                )
+            except Exception:
+                pass
             if TOURNAMENT_CHANNEL:
                 try: await context.bot.send_message(TOURNAMENT_CHANNEL,text,parse_mode='HTML')
                 except Exception: pass
@@ -671,34 +956,46 @@ async def _maybe_advance_round(context, tid, round_no):
             )
         except Exception:
             pass
-    await context.bot.send_message(TOURNAMENT_GROUP_ID,f"🔔 <b>Round {next_round} ready!</b>\n\n👥 Advancing players: <b>{len(all_winners)}</b>\n🎯 Odd players are rewarded and eliminated; they do not play again.\n\nStarting all matches together...",parse_mode='HTML')
-    await _launch_round(context,tid,next_round)
+    await context.bot.send_message(TOURNAMENT_GROUP_ID,f"🔔 <b>Round {next_round} ready!</b>\n\n👥 Advancing players: <b>{len(all_winners)}</b>\n🎯 Odd players are rewarded and eliminated; they do not play again.\n\nStarting rooms with a 10-second gap...",parse_mode='HTML')
+    _schedule_round_launch(context, tid, next_round)
 
 
-async def _launch_round(context,tid,round_no):
-    matches=await db.get_tournament_matches(tid,round_no)
-    pending=[m for m in matches if m['status']=='pending']
-
-    # Start tournament rooms one at a time with a 10-second gap.  Creating
-    # many Telegram game rooms simultaneously can overload the bot/group and
-    # cause missed callbacks/messages, so never launch a whole round at once.
-    for index, m in enumerate(pending):
-        try:
-            await _start_match(context,tid,round_no,m)
-        except Exception as exc:
-            logging.exception('Failed to start tournament match %s: %s', m.get('id'), exc)
+async def _launch_round_worker(context, tid, round_no):
+    key = (tid, round_no)
+    try:
+        matches = await db.get_tournament_matches(tid, round_no)
+        pending = [m for m in matches if m.get('status') == 'pending']
+        # Rooms are intentionally serialized with a 10-second gap to protect
+        # Telegram/group responsiveness. The worker itself runs in background
+        # so /tstart and round completion never wait for the whole launch queue.
+        for index, m in enumerate(pending):
             try:
-                await db.update_tournament_match(m.get('id'), status='pending', launch_error=str(exc)[:500])
-            except Exception:
-                pass
-        if index < len(pending) - 1:
-            await asyncio.sleep(10)
+                await _start_match(context, tid, round_no, m)
+            except Exception as exc:
+                logging.exception('Failed to start tournament match %s: %s', m.get('id'), exc)
+                try:
+                    await db.update_tournament_match(m.get('id'), status='pending', launch_error=str(exc)[:500])
+                except Exception:
+                    pass
+            if index < len(pending) - 1:
+                await asyncio.sleep(10)
 
-    byes=[m for m in matches if m['status']=='bye']
-    for b in byes:
-        await db.update_tournament_match(b['id'], status='bye_rewarded')
-    if byes:
-        await _maybe_advance_round(context,tid,round_no)
+        byes = [m for m in matches if m.get('status') == 'bye']
+        for b in byes:
+            await db.update_tournament_match(b['id'], status='bye_rewarded')
+        if byes:
+            await _maybe_advance_round(context, tid, round_no)
+    finally:
+        ROUND_LAUNCH_TASKS.pop(key, None)
+
+def _schedule_round_launch(context, tid, round_no):
+    key = (tid, round_no)
+    task = ROUND_LAUNCH_TASKS.get(key)
+    if task and not task.done():
+        return task
+    task = asyncio.create_task(_launch_round_worker(context, tid, round_no))
+    ROUND_LAUNCH_TASKS[key] = task
+    return task
 
 
 async def cmd_tstart(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -717,7 +1014,7 @@ async def start_tournament(context,tid):
     players=t.get('players',[])
     if len(players)<2: return False,'❌ At least 2 players are required.'
     # Support ANY player count >= 2. For non-power-of-two fields, the bot
-    # creates a standard knockout bracket with random first-round byes.
+    # creates a standard knockout bracket with random odd-player elimination rewards.
     random.shuffle(players)
     await db.clear_tournament_matches(tid)
     round_no=1
@@ -728,16 +1025,10 @@ async def start_tournament(context,tid):
     await db.update_tournament(tid,status='running',current_round=round_no,players=players,
                                bracket_size=1 << (len(players)-1).bit_length(),
                                bracket_progression=progression)
-    if TOURNAMENT_GROUP_ID:
-        bye_text = (f"\n🎟️ First-round byes: <b>{len(bye_players)}</b>" if bye_players else "")
-        await context.bot.send_message(TOURNAMENT_GROUP_ID,
-            f"🏆 <b>{_esc(t['name'])}</b> is starting!\n\n"
-            f"👥 Registered: <b>{len(players)}</b>\n"
-            f"📊 Bracket: <b>{_esc(progression)}</b>\n"
-            f"🎲 Players were shuffled randomly.{bye_text}\n"
-            f"⚔️ Round 1 rooms will start one by one with a 10-second gap.", parse_mode='HTML')
-    await _launch_round(context,tid,round_no)
-    return True,'▶️ Tournament started.'
+    # Do not automatically announce the tournament when it is created or started.
+    # The owner controls public registration announcements via /announce.
+    _schedule_round_launch(context, tid, round_no)
+    return True,'▶️ Tournament started. Rooms are being launched every 10 seconds.'
 
 
 async def handle_tstart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -756,4 +1047,4 @@ async def recover_tournaments(context: ContextTypes.DEFAULT_TYPE):
         # Unfinished matches are reset to pending; already finished winners stay stored.
         for m in matches:
             if m['status']=='playing': await db.update_tournament_match(m['id'],status='pending')
-        await _launch_round(context,t['id'],t.get('current_round',1))
+        _schedule_round_launch(context, t['id'], t.get('current_round', 1))

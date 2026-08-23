@@ -1,0 +1,1131 @@
+import asyncio
+import io
+from collections import defaultdict
+from typing import Optional
+
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ContextTypes
+from telegram.error import BadRequest, Forbidden
+
+import database as db
+from cards import (
+    generate_card,
+    count_completed_lines,
+    build_dm_card_text,
+    build_dm_card_keyboard,
+    build_group_turn_text,
+    build_group_turn_keyboard,
+    build_group_waiting_text,
+)
+from economy import award_winner, record_loss, process_forfeit
+from models import WIN_COINS, FORFEIT_COST, CANCEL_FREE_THRESHOLD, LINES_TO_WIN, LOGGER_GROUP_ID, SUPPORT_CHANNEL
+from utils import display_name_from_db, format_called_numbers
+
+ROOM_LOCKS = defaultdict(asyncio.Lock)
+# Per-process hot caches. Heroku runs one Telegram polling worker; MongoDB remains
+# the source of truth, while these caches remove repeated reads from the click path.
+USER_CACHE = {}
+CARD_CACHE = {}
+CACHE_TTL = 30.0
+
+def _cached_user(player_id: int, loader):
+    import time
+    item = USER_CACHE.get(player_id)
+    if item and time.monotonic() - item[0] < CACHE_TTL:
+        return item[1]
+    return None
+
+async def _get_user_fast(player_id: int):
+    import time
+    item = USER_CACHE.get(player_id)
+    if item and time.monotonic() - item[0] < CACHE_TTL:
+        return item[1]
+    user = await db.get_user(player_id)
+    if user:
+        USER_CACHE[player_id] = (time.monotonic(), user)
+    return user
+
+async def _get_card_fast(room_id: str, player_id: int):
+    import time
+    key = (room_id, player_id)
+    item = CARD_CACHE.get(key)
+    if item and time.monotonic() - item[0] < CACHE_TTL:
+        return item[1]
+    card = await db.get_card(room_id, player_id)
+    if card:
+        CARD_CACHE[key] = (time.monotonic(), card)
+    return card
+
+
+def _msg_link(chat_id: int, message_id: int) -> str:
+    cid = str(chat_id)
+    link_id = cid[4:] if cid.startswith("-100") else cid.lstrip("-")
+    return f"https://t.me/c/{link_id}/{message_id}"
+
+
+async def _log(context, text: str):
+    if not LOGGER_GROUP_ID:
+        return
+    try:
+        await context.bot.send_message(LOGGER_GROUP_ID, text, parse_mode="HTML")
+    except Exception:
+        pass
+
+
+async def _try_pin(context, chat_id: int, message_id: int):
+    try:
+        await context.bot.pin_chat_message(
+            chat_id=chat_id, message_id=message_id, disable_notification=True
+        )
+    except (BadRequest, Forbidden):
+        pass
+
+
+async def _try_unpin(context, chat_id: int, message_id: int):
+    try:
+        await context.bot.unpin_chat_message(chat_id=chat_id, message_id=message_id)
+    except (BadRequest, Forbidden):
+        pass
+
+
+def _open_card_kb(bot_username: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("📩 Open My Card", url=f"https://t.me/{bot_username}")
+    ]])
+
+
+def build_live_message(room: dict, p1: dict, p2: dict) -> str:
+    called = room.get("called_numbers") or []
+    called_str = format_called_numbers(called)
+    p1_name = display_name_from_db(p1)
+    p2_name = display_name_from_db(p2)
+    turn_name = p1_name if room["current_turn"] == room["player1_id"] else p2_name
+    phase = room.get("phase", "call")
+    last_called = room.get("last_called_number")
+
+    if phase == "call":
+        status = f"🎯 <b>{turn_name}</b> is choosing a number..."
+    else:
+        marker_name = p2_name if room["current_turn"] == room["player1_id"] else p1_name
+        status = f"⚡ <b>{marker_name}</b> is marking number <b>{last_called}</b>..."
+
+    return "\n".join([
+        f"🎮 <b>Velocity Bingo — Room #{room['room_number']}</b>",
+        "",
+        f"👤 Player 1: {p1_name}",
+        f"👤 Player 2: {p2_name}",
+        "",
+        f"🎯 Turn: <b>{turn_name}</b>",
+        f"📢 Last Called: <b>{last_called if last_called else 'None'}</b>",
+        f"📋 Called: {called_str}",
+        "",
+        f"🔄 {status}",
+    ])
+
+
+async def _try_edit(context, chat_id, message_id, text, keyboard=None):
+    for _ in range(3):
+        try:
+            await context.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=text,
+                reply_markup=keyboard,
+                parse_mode="HTML",
+            )
+            return True
+        except BadRequest as e:
+            if "Message is not modified" in str(e):
+                return True
+
+            await asyncio.sleep(0.15)
+
+        except Exception:
+            await asyncio.sleep(0.15)
+            
+    return False
+
+
+async def send_dm_card(
+    context: ContextTypes.DEFAULT_TYPE,
+    room: dict,
+    player_id: int,
+    player_name: str,
+    opponent_name: str,
+    is_my_turn_to_call: bool,
+    need_to_mark: bool,
+) -> bool:
+    card = await _get_card_fast(room["id"], player_id)
+    if not card:
+        return False
+
+    called = room.get("called_numbers") or []
+    last_called = room.get("last_called_number")
+
+    text = build_dm_card_text(
+        room_number=room["room_number"],
+        player_name=player_name,
+        opponent_name=opponent_name,
+        numbers=card["numbers"],
+        marked=card["marked_numbers"],
+        completed_lines=card["completed_lines"],
+        called_numbers=called,
+        is_my_turn_to_call=is_my_turn_to_call,
+        need_to_mark=need_to_mark,
+        last_called=last_called,
+    )
+    keyboard = build_dm_card_keyboard(
+        room_id=room["id"],
+        numbers=card["numbers"],
+        marked=card["marked_numbers"],
+        called_numbers=called,
+        last_called=last_called,
+        is_my_turn_to_call=is_my_turn_to_call,
+        need_to_mark=need_to_mark,
+    )
+
+    try:
+        if card.get("card_message_id"):
+            try:
+                await context.bot.edit_message_text(
+                    chat_id=player_id,
+                    message_id=card["card_message_id"],
+                    text=text,
+                    reply_markup=keyboard,
+                    parse_mode="HTML",
+                )
+                return True
+            except BadRequest as e:
+                if "Message is not modified" in str(e):
+                    return True
+
+        msg = await context.bot.send_message(
+            chat_id=player_id, text=text, reply_markup=keyboard, parse_mode="HTML"
+        )
+        await db.update_card_message_id(card["id"], msg.message_id)
+        return True
+    except (Forbidden, BadRequest):
+        return False
+
+
+async def update_group_turn_panel(
+    context: ContextTypes.DEFAULT_TYPE,
+    room: dict,
+    active_player_id: int,
+    active_player_name: str,
+    waiting_player_name: str,
+):
+    """Fast group status update using send-new/delete-old.
+
+    The new message is sent first so players see the latest state without
+    waiting for Telegram to delete the previous message. Old-message deletion
+    is deliberately fire-and-forget.
+    """
+    bot_username = context.bot.username
+    phase = room.get("phase", "call")
+    last_called = room.get("last_called_number")
+    chat_id = room["chat_id"]
+    called = room.get("called_numbers") or []
+    called_text = " • ".join(str(n) for n in called[-12:]) or "None"
+
+    if phase == "call":
+        status = f"🎯 <b>{active_player_name}</b> — your turn to call."
+    else:
+        status = f"⚡ <b>{active_player_name}</b> — mark <b>{last_called}</b>."
+
+    # Use the player names already supplied by the click handler. This avoids
+    # two extra MongoDB reads on every number click.
+    p1_id = room["player1_id"]
+    p2_id = room["player2_id"]
+    if active_player_id == p1_id:
+        p1_name, p2_name = active_player_name, waiting_player_name
+    else:
+        p1_name, p2_name = waiting_player_name, active_player_name
+
+    text = (
+        f"🎮 <b>Velocity Bingo — Room #{room['room_number']}</b>\n\n"
+        f"👤 {p1_name}\n"
+        f"👤 {p2_name}\n\n"
+        f"📢 Last: <b>{last_called if last_called else 'None'}</b>\n"
+        f"📋 Called: <b>{called_text}</b>\n\n"
+        f"{status}"
+    )
+    keyboard = build_group_turn_keyboard(bot_username, SUPPORT_CHANNEL)
+    old_message_id = room.get("group_panel_message_id")
+
+    try:
+        # Send first: this is the latency-critical operation.
+        msg = await context.bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            reply_markup=keyboard,
+            parse_mode="HTML",
+        )
+        # Persist the new message before scheduling deletion of the old one.
+        await db.update_room(room["id"], group_panel_message_id=msg.message_id)
+
+        if old_message_id and old_message_id != msg.message_id:
+            async def _delete_old():
+                try:
+                    await context.bot.delete_message(chat_id=chat_id, message_id=old_message_id)
+                except Exception:
+                    pass
+            asyncio.create_task(_delete_old())
+    except (Forbidden, BadRequest):
+        pass
+    except Exception:
+        # Never let a group-status failure block the Bingo click handler.
+        return
+
+
+async def update_live_message(context, room, p1, p2):
+    # Kept for compatibility with older callers. The persistent group panel is
+    # now the single live group message, so no extra Telegram edit is needed.
+    return
+
+
+ALL_LINES = [
+    [0, 1, 2, 3, 4],
+    [5, 6, 7, 8, 9],
+    [10, 11, 12, 13, 14],
+    [15, 16, 17, 18, 19],
+    [20, 21, 22, 23, 24],
+    [0, 5, 10, 15, 20],
+    [1, 6, 11, 16, 21],
+    [2, 7, 12, 17, 22],
+    [3, 8, 13, 18, 23],
+    [4, 9, 14, 19, 24],
+    [0, 6, 12, 18, 24],
+    [4, 8, 12, 16, 20],
+]
+
+
+def _render_bingo_card_text(numbers: list, marked: list) -> str:
+    """
+    Render winner's 5×5 bingo card as an emoji grid — no libraries needed.
+    🟥 = part of a winning line  🟩 = marked  ⬜ = not yet marked
+    """
+    winning_indices: set = set()
+    for line in ALL_LINES:
+        if all(numbers[i] in marked for i in line):
+            winning_indices.update(line)
+
+    lines_out = []
+    for row in range(5):
+        parts = []
+        for col in range(5):
+            idx = row * 5 + col
+            num = numbers[idx]
+            if idx in winning_indices:
+                icon = "🟥"
+            elif num in marked:
+                icon = "🟩"
+            else:
+                icon = "⬜"
+            parts.append(f"{icon}{num:>2}")
+        lines_out.append("  ".join(parts))
+
+    grid = "\n".join(lines_out)
+    return (
+        f"🎴 <b>Winner's Card:</b>\n"
+        f"<code>{grid}</code>\n"
+        f"🟥 winning line  🟩 marked  ⬜ open\n\n"
+    )
+
+
+def _render_bingo_card_image(
+    numbers: list,
+    marked: list,
+) -> Optional[io.BytesIO]:
+    """
+    Render the winner's bingo card as a PNG image.
+    - 5x5 dark cells with numbers
+    - Green background + checkmark on marked cells
+    - Red lines through every completed winning line
+    Compatible with Pillow 7+ (no rounded_rectangle dependency).
+    Returns BytesIO PNG or None if Pillow is unavailable.
+    """
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError:
+        return None
+
+    try:
+        COLS = 5
+        CELL = 90
+        GAP = 8
+        PAD = 20
+        IMG_SIZE = PAD * 2 + COLS * CELL + (COLS - 1) * GAP
+
+        BG_COLOR = (18, 18, 28)
+        CELL_DARK = (45, 32, 24)
+        CELL_MARKED = (28, 68, 28)
+        NUM_COLOR = (230, 230, 230)
+        CHECK_COLOR = (80, 220, 80)
+        LINE_COLOR = (220, 30, 30)
+        LINE_W = 7
+
+        img = Image.new("RGB", (IMG_SIZE, IMG_SIZE), BG_COLOR)
+        draw = ImageDraw.Draw(img)
+
+        font_num = None
+        font_small = None
+        for font_path in [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+            "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
+        ]:
+            try:
+                font_num = ImageFont.truetype(font_path, 28)
+                font_small = ImageFont.truetype(font_path, 18)
+                break
+            except Exception:
+                continue
+        if font_num is None:
+            font_num = ImageFont.load_default()
+            font_small = font_num
+
+        def cell_rect(idx):
+            row, col = divmod(idx, COLS)
+            x = PAD + col * (CELL + GAP)
+            y = PAD + row * (CELL + GAP)
+            return x, y, x + CELL, y + CELL
+
+        def cell_center(idx):
+            x0, y0, x1, y1 = cell_rect(idx)
+            return (x0 + x1) // 2, (y0 + y1) // 2
+
+        def draw_cell(idx, color):
+            x0, y0, x1, y1 = cell_rect(idx)
+            try:
+                draw.rounded_rectangle([x0, y0, x1, y1], radius=12, fill=color)
+            except AttributeError:
+                draw.rectangle([x0, y0, x1, y1], fill=color)
+
+        for idx in range(25):
+            is_marked = numbers[idx] in marked
+            draw_cell(idx, CELL_MARKED if is_marked else CELL_DARK)
+
+            cx, cy = cell_center(idx)
+            num_str = str(numbers[idx])
+
+            if is_marked:
+                try:
+                    draw.text((cx, cy - 14), "✓", fill=CHECK_COLOR,
+                              font=font_small, anchor="mm")
+                    draw.text((cx, cy + 16), num_str, fill=NUM_COLOR,
+                              font=font_small, anchor="mm")
+                except TypeError:
+                    draw.text((cx - 10, cy - 24), "✓", fill=CHECK_COLOR, font=font_small)
+                    draw.text((cx - 10, cy + 4), num_str, fill=NUM_COLOR, font=font_small)
+            else:
+                try:
+                    draw.text((cx, cy), num_str, fill=NUM_COLOR,
+                              font=font_num, anchor="mm")
+                except TypeError:
+                    draw.text((cx - 10, cy - 14), num_str, fill=NUM_COLOR, font=font_num)
+
+        completed_lines = [
+            line for line in ALL_LINES
+            if all(numbers[i] in marked for i in line)
+        ]
+        for line in completed_lines:
+            start = cell_center(line[0])
+            end = cell_center(line[-1])
+            draw.line([start, end], fill=LINE_COLOR, width=LINE_W)
+
+        out = io.BytesIO()
+        img.save(out, format="PNG")
+        out.seek(0)
+        return out
+    except Exception:
+        return None
+
+
+async def handle_card_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Fast, race-safe Bingo button handler.
+
+    The database transition is atomic, then Telegram updates are sent in parallel.
+    This keeps number clicks responsive even when many rooms are active.
+    """
+    query = update.callback_query
+    parts = query.data.split(":")
+    if len(parts) != 3:
+        await query.answer()
+        return
+
+    room_id = parts[1]
+    try:
+        number = int(parts[2])
+    except ValueError:
+        await query.answer("Invalid number.", show_alert=True)
+        return
+    player_id = query.from_user.id
+
+    if query.message.chat.type != "private":
+        await query.answer("🚫 Use your private Bingo card.", show_alert=True)
+        return
+
+    room = await db.get_room(room_id)
+    if not room or room.get("status") != "playing":
+        await query.answer("This game is no longer active.", show_alert=True)
+        return
+    if player_id not in (room["player1_id"], room["player2_id"]):
+        await query.answer("🚫 You are not in this game.", show_alert=True)
+        return
+
+    async with ROOM_LOCKS[room_id]:
+        room = await db.get_room(room_id)
+        if not room or room.get("status") != "playing":
+            await query.answer("This game is no longer active.", show_alert=True)
+            return
+
+        p1, p2 = await asyncio.gather(
+            _get_user_fast(room["player1_id"]), _get_user_fast(room["player2_id"])
+        )
+        p1_name = display_name_from_db(p1)
+        p2_name = display_name_from_db(p2)
+        phase = room.get("phase", "call")
+
+        if phase == "call":
+            if player_id != room.get("current_turn"):
+                other = p2 if player_id == room["player1_id"] else p1
+                await query.answer(f"⏳ Not your turn! Wait for {display_name_from_db(other)}.", show_alert=True)
+                return
+
+            new_room = await db.claim_call(room_id, player_id, number)
+            if not new_room:
+                await query.answer("🚫 That number was already called or the turn changed.", show_alert=True)
+                return
+            room = new_room
+            caller_name = p1_name if player_id == room["player1_id"] else p2_name
+            marker_id = room["player2_id"] if player_id == room["player1_id"] else room["player1_id"]
+            marker_name = p2_name if player_id == room["player1_id"] else p1_name
+
+            # DM cards + the single group status panel are updated concurrently.
+            # Acknowledge the Telegram click immediately after the atomic state change.
+            # The slower visual updates continue concurrently after the popup is shown.
+            await query.answer(f"📢 You called {number}!")
+            await asyncio.gather(
+                send_dm_card(context, room, player_id, caller_name, marker_name, False, False),
+                send_dm_card(context, room, marker_id, marker_name, caller_name, False, True),
+                update_group_turn_panel(context, room, marker_id, marker_name, caller_name),
+            )
+            return
+
+        if phase == "mark":
+            marker_id = room.get("marker_id") or (
+                room["player2_id"] if room["current_turn"] == room["player1_id"] else room["player1_id"]
+            )
+            last_called = room.get("last_called_number")
+            if player_id != marker_id:
+                await query.answer(f"⏳ Wait — the other player needs to mark {last_called}!", show_alert=True)
+                return
+            if number != last_called:
+                await query.answer(f"🚫 You must mark the called number: {last_called}", show_alert=True)
+                return
+
+            card = await _get_card_fast(room_id, player_id)
+            if not card:
+                await query.answer("Card not found. Please contact the owner.", show_alert=True)
+                return
+            if number in card.get("marked_numbers", []):
+                await query.answer("Already marked.", show_alert=True)
+                return
+
+            new_marked = card.get("marked_numbers", []) + [number]
+            new_lines = count_completed_lines(card["numbers"], new_marked)
+            if not await db.claim_mark(card["id"], number, new_lines):
+                await query.answer("Already marked.", show_alert=True)
+                return
+            # Keep the hot card cache in sync with the atomic MongoDB write.
+            import time
+            card["marked_numbers"] = list(dict.fromkeys(new_marked))
+            card["completed_lines"] = new_lines
+            CARD_CACHE[(room_id, player_id)] = (time.monotonic(), card)
+
+            if new_lines >= LINES_TO_WIN:
+                room = await db.get_room(room_id)
+                await handle_bingo_win(context, room, player_id, p1, p2, room.get("called_numbers", []))
+                await query.answer("🏆 BINGO!")
+                return
+
+            room = await db.transition_mark_to_call(room_id, player_id)
+            if not room:
+                await query.answer("The match state changed. Please try again.", show_alert=True)
+                return
+
+            other_id = room["player2_id"] if player_id == room["player1_id"] else room["player1_id"]
+            marker_name = p1_name if player_id == room["player1_id"] else p2_name
+            caller_name = p2_name if player_id == room["player1_id"] else p1_name
+
+            await query.answer(f"✅ Marked {number}!")
+            await asyncio.gather(
+                send_dm_card(context, room, player_id, marker_name, caller_name, True, False),
+                send_dm_card(context, room, other_id, caller_name, marker_name, False, False),
+                update_group_turn_panel(context, room, other_id, caller_name, marker_name),
+            )
+            return
+
+    await query.answer()
+
+
+async def handle_bingo_win(context, room, winner_id, p1, p2, called):
+    chat_id = room["chat_id"]
+    loser_id = room["player2_id"] if winner_id == room["player1_id"] else room["player1_id"]
+    await db.finish_room(room["id"])
+    if room.get("last_call_message_id"):
+        try:
+            await context.bot.delete_message(
+                room["chat_id"],
+                room["last_call_message_id"],
+            )
+        except Exception:
+            pass
+
+    if room.get("live_message_id"):
+        try:
+            await context.bot.delete_message(
+                room["chat_id"],
+                room["live_message_id"],
+            )
+        except Exception:
+            pass
+
+    if room.get("group_panel_message_id"):
+        try:
+            await context.bot.delete_message(
+                room["chat_id"],
+                room["group_panel_message_id"],
+            )
+        except Exception:
+            pass
+    
+    await asyncio.gather(
+        award_winner(winner_id, chat_id),
+        record_loss(loser_id, chat_id),
+    )
+
+    winner = p1 if winner_id == room["player1_id"] else p2
+    loser = p2 if winner_id == room["player1_id"] else p1
+    winner_name = display_name_from_db(winner)
+    loser_name = display_name_from_db(loser)
+
+    win_text = (
+        f"🏆 <b>BINGO!</b>\n\n"
+        f"🥇 Winner: <b>{winner_name}</b>\n"
+        f"😔 Loser: <b>{loser_name}</b>\n"
+        f"🏠 Room: <b>#{room['room_number']}</b>\n"
+        f"💰 Reward: <b>+{WIN_COINS} Coins</b>\n\n"
+        f"📋 Numbers called: {format_called_numbers(called)}"
+    )
+
+    rematch_kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🔄 Rematch!", callback_data=f"rematch:{room['id']}")
+    ]])
+
+    winner_card = await db.get_card(room["id"], winner_id)
+    card_image = None
+    card_text = ""
+    if winner_card:
+        # Merge DB marked numbers with every called number that appears on the
+        # winner's card — this guarantees the last click is always visible even
+        # if the async DB write hasn't settled yet.
+        card_numbers_set = set(winner_card["numbers"])
+        effective_marked = list(
+            set(winner_card.get("marked_numbers", [])) |
+            {n for n in called if n in card_numbers_set}
+        )
+        card_image = _render_bingo_card_image(
+            numbers=winner_card["numbers"],
+            marked=effective_marked,
+        )
+        card_text = _render_bingo_card_text(
+            numbers=winner_card["numbers"],
+            marked=effective_marked,
+        )
+
+    live_mid = room.get("live_message_id")
+
+    async def _send_result_to_group():
+        if live_mid:
+            try:
+                await context.bot.delete_message(chat_id=chat_id, message_id=live_mid)
+            except (BadRequest, Forbidden):
+                pass
+
+        if card_image is not None:
+            try:
+                await context.bot.send_photo(
+                    chat_id=chat_id,
+                    photo=card_image,
+                    caption=win_text,
+                    reply_markup=rematch_kb,
+                    parse_mode="HTML",
+                )
+                return
+            except Exception:
+                if card_image:
+                    card_image.seek(0)
+
+        full_text = card_text + win_text
+        await context.bot.send_message(
+            chat_id=chat_id, text=full_text, reply_markup=rematch_kb, parse_mode="HTML"
+        )
+
+    await _send_result_to_group()
+
+    if live_mid:
+        await _try_unpin(context, chat_id, live_mid)
+
+    for pid in (room["player1_id"], room["player2_id"]):
+        card = await db.get_card(room["id"], pid)
+        is_winner = pid == winner_id
+        result = "🏆 You won! +500 coins added." if is_winner else "😔 You lost. Better luck next time!"
+        final_dm = (
+            f"🏁 <b>Game Over — Room #{room['room_number']}</b>\n\n"
+            f"{result}\n"
+            f"🥇 Winner: <b>{winner_name}</b>\n"
+            f"😔 Loser: <b>{loser_name}</b>"
+        )
+        try:
+            if card and card.get("card_message_id"):
+                try:
+                    await context.bot.edit_message_text(
+                        chat_id=pid, message_id=card["card_message_id"],
+                        text=final_dm, parse_mode="HTML",
+                    )
+                except BadRequest:
+                    await context.bot.send_message(chat_id=pid, text=final_dm, parse_mode="HTML")
+            else:
+                await context.bot.send_message(chat_id=pid, text=final_dm, parse_mode="HTML")
+        except (Forbidden, BadRequest):
+            pass
+
+    for pid in (room["player1_id"], room["player2_id"]):
+        panel_card = await db.get_card(room["id"], pid)
+        if panel_card and panel_card.get("card_message_id"):
+            try:
+                await context.bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=panel_card["card_message_id"],
+                    text=(
+                        f"🏁 <b>Game Over — Room #{room['room_number']}</b>\n\n"
+                        f"🥇 Winner: <b>{winner_name}</b>\n"
+                        f"😔 Loser: <b>{loser_name}</b>"
+                    ),
+                    parse_mode="HTML",
+                )
+            except BadRequest:
+                pass
+
+async def _end_game_by_cancellation(context, room: dict, forfeiter_id: int, forfeiter_name: str):
+    """Shared logic: close the room and clean up messages after a free cancel or forfeit."""
+    chat_id = room["chat_id"]
+    await db.cancel_room(room["id"])
+    for mid_key in ("live_message_id", "last_call_message_id", "group_panel_message_id"):
+        mid = room.get(mid_key)
+        if mid:
+            try:
+                await context.bot.delete_message(chat_id=chat_id, message_id=mid)
+            except Exception:
+                pass
+async def handle_cancel_game_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the free-cancel button (≤ CANCEL_FREE_THRESHOLD numbers called).
+    No coins change hands. The match ends with no winner and does not count
+    toward leaderboards, missions, or Telegram-Premium events.
+    """
+    query = update.callback_query
+    user = query.from_user
+    room_id = query.data.split(":")[1]
+    room = await db.get_room(room_id)
+    if not room or room["status"] != "playing":
+        await query.answer("This game is no longer active.", show_alert=True)
+        return
+    if user.id not in (room["player1_id"], room["player2_id"]):
+        await query.answer("🚫 You are not in this game!", show_alert=True)
+        return
+    called = room.get("called_numbers") or []
+    if len(called) > CANCEL_FREE_THRESHOLD:
+        # Race condition: numbers were called after the button was rendered.
+        # Silently redirect to the forfeit confirmation instead.
+        await query.answer(
+            "⚠️ More than 5 numbers have now been called. Use the Forfeit button.",
+            show_alert=True,
+        )
+        return
+    player = await db.get_user(user.id)
+    forfeiter_name = display_name_from_db(player) if player else "A player"
+    await _end_game_by_cancellation(context, room, user.id, forfeiter_name)
+    # Announce in group
+    cancel_text = (
+        f"🚫 <b>Match Cancelled — Room #{room['room_number']}</b>\n\n"
+        f"<b>{forfeiter_name}</b> cancelled the game.\n"
+        f"• No winner declared\n"
+        f"• No coins awarded\n"
+        f"• Match does not count toward any leaderboard or event"
+    )
+    try:
+        await context.bot.send_message(
+            chat_id=room["chat_id"], text=cancel_text, parse_mode="HTML"
+        )
+    except Exception:
+        pass
+    # Notify both players privately
+    opponent_id = (
+        room["player2_id"] if user.id == room["player1_id"] else room["player1_id"]
+    )
+    try:
+        await context.bot.send_message(
+            chat_id=opponent_id,
+            text=(
+                f"🚫 <b>Room #{room['room_number']}</b> was cancelled by "
+                f"<b>{forfeiter_name}</b>.\n"
+                f"No coins were awarded. The match has been removed from records."
+            ),
+            parse_mode="HTML",
+        )
+    except (Forbidden, BadRequest):
+        pass
+    # Edit the DM card to show cancellation
+    card = await db.get_card(room["id"], user.id)
+    if card and card.get("card_message_id"):
+        try:
+            await context.bot.edit_message_text(
+                chat_id=user.id,
+                message_id=card["card_message_id"],
+                text=(
+                    f"🚫 <b>Room #{room['room_number']} Cancelled</b>\n\n"
+                    f"You cancelled the match. No coins were deducted or awarded."
+                ),
+                parse_mode="HTML",
+            )
+        except (BadRequest, Forbidden):
+            pass
+    await query.answer("Match cancelled. No coins deducted.")
+async def handle_forfeit_ask_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Shows the confirmation dialog before processing a post-5th-number forfeit."""
+    query = update.callback_query
+    user = query.from_user
+    room_id = query.data.split(":")[1]
+    room = await db.get_room(room_id)
+    if not room or room["status"] != "playing":
+        await query.answer("This game is no longer active.", show_alert=True)
+        return
+    if user.id not in (room["player1_id"], room["player2_id"]):
+        await query.answer("🚫 You are not in this game!", show_alert=True)
+        return
+    # Balance check — show error immediately, before showing the dialog
+    player = await db.get_user(user.id)
+    if not player or player.get("coins", 0) < FORFEIT_COST:
+        await query.answer(
+            f"❌ You need at least {FORFEIT_COST} coins to forfeit this match.",
+            show_alert=True,
+        )
+        return
+    await query.answer()
+    confirm_text = (
+        f"⚠️ <b>Forfeit Match — Room #{room['room_number']}?</b>\n\n"
+        f"• <b>{FORFEIT_COST} coins</b> will be deducted from your balance.\n"
+        f"• Your opponent will <b>not</b> receive any coin reward.\n"
+        f"• This match will end immediately.\n"
+        f"• The match will <b>not</b> count toward event progress or premium milestones."
+    )
+    confirm_kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Confirm Forfeit", callback_data=f"forfeit_confirm:{room_id}"),
+            InlineKeyboardButton("↩ Back", callback_data=f"forfeit_back:{room_id}"),
+        ]
+    ])
+    try:
+        await context.bot.send_message(
+            chat_id=user.id,
+            text=confirm_text,
+            reply_markup=confirm_kb,
+            parse_mode="HTML",
+        )
+    except (Forbidden, BadRequest):
+        pass
+async def handle_forfeit_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Processes a confirmed forfeit after the 5th number.
+    Deducts FORFEIT_COST from the forfeiter. Opponent receives nothing.
+    The match does not count toward events or leaderboards.
+    """
+    query = update.callback_query
+    user = query.from_user
+    room_id = query.data.split(":")[1]
+    # Dismiss the confirmation message immediately
+    try:
+        await context.bot.delete_message(
+            chat_id=user.id, message_id=query.message.message_id
+        )
+    except Exception:
+        pass
+    room = await db.get_room(room_id)
+    if not room or room["status"] != "playing":
+        await query.answer("This game is no longer active.", show_alert=True)
+        return
+    if user.id not in (room["player1_id"], room["player2_id"]):
+        await query.answer("🚫 You are not in this game!", show_alert=True)
+        return
+    # Re-verify balance atomically and deduct — prevents bypassing via race conditions
+    success = await process_forfeit(user.id, room["chat_id"])
+    if not success:
+        await query.answer(
+            f"❌ You need at least {FORFEIT_COST} coins to forfeit this match.",
+            show_alert=True,
+        )
+        return
+    player = await db.get_user(user.id)
+    forfeiter_name = display_name_from_db(player) if player else "A player"
+    opponent_id = (
+        room["player2_id"] if user.id == room["player1_id"] else room["player1_id"]
+    )
+    opponent = await db.get_user(opponent_id)
+    opponent_name = display_name_from_db(opponent) if opponent else "Opponent"
+    await _end_game_by_cancellation(context, room, user.id, forfeiter_name)
+    forfeit_text = (
+        f"🏳️ <b>Forfeit — Room #{room['room_number']}</b>\n\n"
+        f"😔 <b>{forfeiter_name}</b> forfeited the match.\n"
+        f"💸 <b>−{FORFEIT_COST} coins</b> deducted from {forfeiter_name}'s balance.\n"
+        f"🤝 No coins awarded to either player.\n"
+        f"📊 This match does not count toward event progress or leaderboards."
+    )
+    try:
+        await context.bot.send_message(
+            chat_id=room["chat_id"], text=forfeit_text, parse_mode="HTML"
+        )
+    except Exception:
+        pass
+    # Notify opponent
+    try:
+        await context.bot.send_message(
+            chat_id=opponent_id,
+            text=(
+                f"🏳️ <b>{forfeiter_name}</b> forfeited Room #{room['room_number']}.\n"
+                f"You were not awarded any coins (match ended by forfeit)."
+            ),
+            parse_mode="HTML",
+        )
+    except (Forbidden, BadRequest):
+        pass
+    # Edit DM card for the forfeiter
+    card = await db.get_card(room["id"], user.id)
+    if card and card.get("card_message_id"):
+        try:
+            await context.bot.edit_message_text(
+                chat_id=user.id,
+                message_id=card["card_message_id"],
+                text=(
+                    f"🏳️ <b>Room #{room['room_number']} — You Forfeited</b>\n\n"
+                    f"💸 <b>−{FORFEIT_COST} coins</b> deducted from your balance.\n"
+                    f"Your opponent received no reward."
+                ),
+                parse_mode="HTML",
+            )
+        except (BadRequest, Forbidden):
+            pass
+    await query.answer(f"Forfeited. −{FORFEIT_COST} coins deducted.")
+
+async def handle_rematch_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user = query.from_user
+    old_room_id = query.data.split(":")[1]
+
+    old_room = await db.get_room(old_room_id)
+    if not old_room:
+        await query.answer("Original room not found.", show_alert=True)
+        return
+
+    if user.id not in (old_room["player1_id"], old_room["player2_id"]):
+        await query.answer("🚫 Only players from this match can rematch!", show_alert=True)
+        return
+
+    if old_room["status"] not in ("finished", "cancelled"):
+        await query.answer("Game isn't over yet!", show_alert=True)
+        return
+
+    p1_id = old_room["player1_id"]
+    p2_id = old_room["player2_id"]
+    chat_id = old_room["chat_id"]
+
+    p1 = await db.get_user(p1_id)
+    p2 = await db.get_user(p2_id)
+
+    if not p1 or not p2:
+        await query.answer("A player is no longer registered.", show_alert=True)
+        return
+
+    if await db.is_player_in_active_room(p1_id):
+        await query.answer(
+            f"{display_name_from_db(p1)} is already in another active match!",
+            show_alert=True,
+        )
+        return
+
+    if await db.is_player_in_active_room(p2_id):
+        await query.answer(
+            f"{display_name_from_db(p2)} is already in another active match!",
+            show_alert=True,
+        )
+        return
+
+    from models import MAX_ROOMS_PER_CHAT
+    active_rooms = await db.get_active_rooms_in_chat(chat_id)
+    if len(active_rooms) >= MAX_ROOMS_PER_CHAT:
+        await query.answer(
+            f"This group already has {MAX_ROOMS_PER_CHAT} active rooms. Wait for one to finish!",
+            show_alert=True,
+        )
+        return
+
+    await query.answer("🔄 Starting rematch!")
+
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+    except BadRequest:
+        pass
+
+    room_number = await db.get_next_room_number(chat_id)
+    placeholder = await context.bot.send_message(
+        chat_id=chat_id, text="🔄 Setting up rematch..."
+    )
+
+    new_room_id = await db.create_room(
+        chat_id=chat_id,
+        room_number=room_number,
+        player1_id=p1_id,
+        room_message_id=placeholder.message_id,
+    )
+    await db.join_room(new_room_id, p2_id)
+
+    asyncio.create_task(
+        start_game_countdown(
+            context,
+            room_id=new_room_id,
+            chat_id=chat_id,
+            p1=p1,
+            p2=p2,
+            room_message_id=placeholder.message_id,
+        )
+    )
+
+
+async def start_game_countdown(context, room_id, chat_id, p1, p2, room_message_id):
+    p1_name = display_name_from_db(p1)
+    p2_name = display_name_from_db(p2)
+    bot_username = context.bot.username
+
+    for count in range(5, 0, -1):
+        try:
+            await context.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=room_message_id,
+                text=(
+                    f"🎉 <b>Opponent Found!</b>\n\n"
+                    f"👤 Player 1: {p1_name}\n"
+                    f"👤 Player 2: {p2_name}\n\n"
+                    f"⏳ Game starts in <b>{count}...</b>"
+                ),
+                parse_mode="HTML",
+            )
+        except BadRequest:
+            pass
+        await asyncio.sleep(1)
+
+    await db.create_card(room_id, p1["telegram_id"], generate_card())
+    await db.create_card(room_id, p2["telegram_id"], generate_card())
+    await db.update_room(room_id,
+                         current_turn=p1["telegram_id"],
+                         phase="call",
+                         last_called_number=None,
+                         called_numbers=[])
+
+    room = await db.get_room(room_id)
+
+    live_text = build_live_message(room, p1, p2)
+    try:
+        live_msg = await context.bot.edit_message_text(
+            chat_id=chat_id, message_id=room_message_id, text=live_text, parse_mode="HTML"
+        )
+    except BadRequest:
+        live_msg = await context.bot.send_message(
+            chat_id=chat_id, text=live_text, parse_mode="HTML"
+        )
+    await db.update_room(room_id, live_message_id=live_msg.message_id)
+    room = await db.get_room(room_id)
+
+    await _try_pin(context, chat_id, live_msg.message_id)
+
+    try:
+        chat_info = await context.bot.get_chat(chat_id)
+        chat_title = chat_info.title or str(chat_id)
+    except Exception:
+        chat_title = str(chat_id)
+
+    await _log(
+        context,
+        f"🎮 <b>Game Started</b>\n\n"
+        f"<b>CHAT:</b> <code>{chat_id}</code> | {chat_title}\n"
+        f"<b>USER:</b> <code>{p1['telegram_id']}</code> | {p1_name}\n"
+        f"<b>VS:</b> <code>{p2['telegram_id']}</code> | {p2_name}\n"
+        f"<b>MESSAGE LINK:</b> {_msg_link(chat_id, live_msg.message_id)}"
+    )
+
+    dm_failed = []
+    for pid, pname, oname, is_caller in [
+        (p1["telegram_id"], p1_name, p2_name, True),
+        (p2["telegram_id"], p2_name, p1_name, False),
+    ]:
+        card = await db.get_card(room_id, pid)
+        text = build_dm_card_text(
+            room_number=room["room_number"],
+            player_name=pname,
+            opponent_name=oname,
+            numbers=card["numbers"],
+            marked=card["marked_numbers"],
+            completed_lines=0,
+            called_numbers=[],
+            is_my_turn_to_call=is_caller,
+            need_to_mark=False,
+            last_called=None,
+        )
+        keyboard = build_dm_card_keyboard(
+            room_id=room_id,
+            numbers=card["numbers"],
+            marked=card["marked_numbers"],
+            called_numbers=[],
+            last_called=None,
+            is_my_turn_to_call=is_caller,
+            need_to_mark=False,
+        )
+        try:
+            msg = await context.bot.send_message(
+                chat_id=pid, text=text, reply_markup=keyboard, parse_mode="HTML"
+            )
+            await db.update_card_message_id(card["id"], msg.message_id)
+        except (Forbidden, BadRequest):
+            dm_failed.append(pname)
+
+    panel_text = build_group_turn_text(room["room_number"], p1_name, p2_name, "call", None)
+    panel_kb = build_group_turn_keyboard(bot_username, SUPPORT_CHANNEL)
+    panel_msg = await context.bot.send_message(
+        chat_id=chat_id,
+        text=panel_text,
+        reply_markup=panel_kb,
+        parse_mode="HTML",
+    )
+    await db.update_room(room_id, group_panel_message_id=panel_msg.message_id)
+
+    if dm_failed:
+        names = ", ".join(dm_failed)
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=(
+                f"⚠️ Could not send private cards to: <b>{names}</b>\n\n"
+                f"These players must start a DM with the bot first:\n"
+                f"👉 @{bot_username} → press <b>Start</b>"
+            ),
+            parse_mode="HTML",
+        )

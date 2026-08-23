@@ -43,35 +43,50 @@ logger = logging.getLogger(__name__)
 
 
 async def _build_start_text(user):
-    name = user.full_name or user.first_name or "Player"
-    return f"""🎮 𝗪𝗲𝗹𝗰𝗼𝗺𝗲 {name} 🎉
-🎯 𝗛𝗼𝘄 𝘁𝗼 𝗣𝗹𝗮𝘆?
+    return f"""
+🎮 <b>VELOCITY BINGO</b>
 
-- Start a 1v1 game and challenge another player.
+{user.mention_html()} Welcome to Velocity Bingo! 🔥
+Velocity Bingo is a competitive 1v1 Bingo game where two players battle against each other to complete their Bingo cards. Every match is played directly through Telegram with interactive buttons.
 
-* Both players get a 5x5 Bingo card with numbers 1-25.
+🎯 <b>HOW THE GAME WORKS</b>
+Each player receives their own private 5×5 Bingo card containing numbers from 1 to 25. Your card is private, so your opponent cannot see which numbers you have available.
 
-- Take turns choosing numbers.
+⚔️ <b>STARTING A MATCH</b>
+Add the bot to your group and use /bingo to create a new game room. Another player can join the room using the Join button, and once both players are ready, the match begins.
 
-* The chosen number is marked on both cards.
+🔢 <b>CALLING NUMBERS</b>
+Players take turns calling numbers during the match. When a number is called, the opponent checks their private card and can mark that number if it is available on their card.
 
-- Complete 5 lines — Rows, Columns or Diagonals — to complete BINGO. The first player to complete it wins 🎊
+🎴 <b>YOUR PRIVATE CARD</b>
+Your Bingo card is sent to you privately by the bot. The card contains interactive buttons, allowing you to easily select and mark the numbers during the match.
 
-💰 𝗣𝗹𝗮𝘆 & 𝗘𝗮𝗿𝗻
+🏆 <b>HOW TO WIN</b>
+Your objective is to complete 5 Bingo lines before your opponent. Lines can be completed horizontally, vertically, or diagonally across your 5×5 card.
 
-🏅 𝗪𝗶𝗻 𝗺𝗮𝘁𝗰𝗵𝗲𝘀 𝗮𝗻𝗱 𝗲𝗮𝗿𝗻 𝗕𝗶𝗻𝗴𝗼 𝗖𝗼𝗶𝗻𝘀
-📊 𝗖𝗵𝗲𝗰𝗸 𝘆𝗼𝘂𝗿 𝗦𝘁𝗮𝘁𝘀 & 𝗪𝗶𝗻𝘀
-🥇 𝗖𝗹𝗶𝗺𝗯 𝘁𝗵𝗲 𝗟𝗲𝗮𝗱𝗲𝗿𝗯𝗼𝗮𝗿𝗱
-🏆 𝗝𝗼𝗶𝗻 𝗧𝗼𝘂𝗿𝗻𝗮𝗺𝗲𝗻𝘁𝘀 & 𝗰𝗼𝗺𝗽𝗲𝘁𝗲 𝗳𝗼𝗿 𝗿𝗲𝘄𝗮𝗿𝗱𝘀!
+⚡ <b>STRATEGY</b>
+Calling the right numbers at the right time can make a big difference. Watch your progress carefully and try to prevent your opponent from completing their lines before you do.
 
-✨ 𝗡𝗼 𝗰𝗼𝗺𝗽𝗹𝗶𝗰𝗮𝘁𝗲𝗱 𝗿𝘂𝗹𝗲𝘀 — 𝗷𝘂𝘀𝘁 𝗽𝗹𝗮𝘆, 𝗰𝗼𝗺𝗽𝗹𝗲𝘁𝗲 𝘆𝗼𝘂𝗿 𝗕𝗜𝗡𝗚𝗢 & 𝗵𝗮𝘃𝗲 𝗳𝘂𝗻! ❤️
+💰 <b>COINS &amp; REWARDS</b>
+Winning a match rewards you with 500 🪙 coins. Your coins can be used as part of the bot's economy, while your match results are saved to your player statistics.
 
-👇 Start playing with your friends. 🎮
-/bingo = to start the match.
-/leaderboard = rankings of the top ten users
-/profile = for your stats
+📊 <b>PLAYER STATISTICS</b>
+Every match contributes to your gaming statistics. Your wins, losses, streaks and other available statistics can be checked from your profile.
 
-👑 𝗣𝗹𝗮𝘆 • 𝗪𝗶𝗻 • 𝗕𝗲𝗰𝗼𝗺𝗲 𝘁𝗵𝗲 𝗕𝗶𝗻𝗴𝗼 𝗖𝗵𝗮𝗺𝗽𝗶𝗼𝗻! 🏆""".strip()
+❌ <b>LEAVING A GAME</b>
+If you no longer want to continue an active match, you can use the available cancel/forfeit option. Be careful, because leaving a match may affect the result and your rewards.
+
+💡 <b>QUICK TIP</b>
+Keep your private Bingo card open while playing. Your opponent's moves and your available number buttons will be shown there, making it easier to follow the match.
+
+🎮 <b>READY TO PLAY?</b>
+Add the bot to your group, use /bingo, invite another player and start your battle!
+🏆 Complete your 5 lines.
+🔥 Beat your opponent.
+💰 Earn your reward.
+👑 Become the Bingo Champion!
+""".strip()
+
 
 async def _build_start_keyboard(context):
     me = await context.bot.get_me()
@@ -84,76 +99,17 @@ async def _build_start_keyboard(context):
     ])
 
 
-async def _build_help_text(user):
-    name = user.full_name or user.first_name or "Player"
-    return f"""🎮 𝗪𝗲𝗹𝗰𝗼𝗺𝗲, {name}!
-
-🎯 𝗦𝘁𝗮𝗿𝘁𝗶𝗻𝗴 𝗮 𝗚𝗮𝗺𝗲
-
-🎮 Create or join a 1v1 match with another player.
-🤝 Once both players join, the game begins.
-🔢 Each player gets a 5×5 Bingo card with numbers 1–25.
-
-📩 Start the bot in private using /start to receive your card and game updates.
-
-🔄 𝗛𝗼𝘄 𝘁𝗵𝗲 𝗚𝗮𝗺𝗲 𝗪𝗼𝗿𝗸𝘀
-
-👆 Players take turns choosing numbers.
-✅ The selected number is marked on both Bingo cards.
-🧠 Complete your lines before your opponent!
-
-🏆 𝗛𝗼𝘄 𝘁𝗼 𝗪𝗶𝗻
-
-Complete 5 full lines to make BINGO:
-➖ Rows — Left to right
-⬇️ Columns — Top to bottom
-✖️ Diagonals — Across the card
-
-🎉 The first player to complete 5 lines wins the match! 👑🏆
-
-💰 𝗖𝗼𝗶𝗻𝘀 & 𝗪𝗶𝗻𝘀
-
-🏅 Win matches and earn Bingo Coins 🪙
-📈 Your stats and results are saved automatically.
-🔥 Keep winning and climb higher!
-
-🥇 𝗟𝗲𝗮𝗱𝗲𝗿𝗯𝗼𝗮𝗿𝗱
-
-Compete with other players and fight for the #1 spot! 👑
-
-❌ 𝗖𝗮𝗻𝗰𝗲𝗹𝗹𝗶𝗻𝗴 & 𝗙𝗮𝗶𝗿 𝗣𝗹𝗮𝘆
-
-Use /cancel if you cannot continue the current match. 🤝
-⚠️ Play fairly and don't keep your opponent waiting!
-
-✨ 𝗤𝘂𝗶𝗰𝗸 𝗦𝘁𝗮𝗿𝘁
-
-1️⃣ Start the Bot → 2️⃣ Join a Match → 3️⃣ Play → 4️⃣ Complete BINGO → 5️⃣ WIN! 🏆""".strip()
-
-async def _send_photo_with_text(message, photo_url, text, reply_markup=None):
-    """Send one Telegram message containing the photo and text as its caption."""
-    if photo_url:
-        try:
-            await message.reply_photo(
-                photo=photo_url,
-                caption=text,
-                reply_markup=reply_markup,
-            )
-            return
-        except Exception as exc:
-            logger.warning("Could not send configured photo with caption: %s", exc)
-    # Fallback keeps the bot usable if the photo URL is not configured or fails.
-    await message.reply_text(text, reply_markup=reply_markup, disable_web_page_preview=True)
-
-
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await db.create_user(user.id, user.username, user.first_name)
 
     text = await _build_start_text(user)
     keyboard = await _build_start_keyboard(context)
-    await _send_photo_with_text(
-        update.message, os.getenv("START_PHOTO_URL", "").strip(), text, keyboard
+    await update.message.reply_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=keyboard,
+        disable_web_page_preview=True,
     )
 
 
@@ -162,10 +118,46 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await db.get_user(user.id):
         await db.create_user(user.id, user.username, user.first_name)
 
-    text = await _build_help_text(user)
-    await _send_photo_with_text(
-        update.message, os.getenv("HELP_PHOTO_URL", "").strip(), text
-    )
+    text = f"""
+❓ <b>VELOCITY BINGO — HELP</b>
+
+🎮 <b>ABOUT THE GAME</b>
+Velocity Bingo is a competitive 1v1 Bingo game where two players compete using private 5×5 cards. Your goal is to complete 5 Bingo lines before your opponent.
+
+⚔️ <b>STARTING A GAME</b>
+Use /bingo in a group to create a game room. Another player can join using the Join button. Both players should start the bot privately before playing.
+
+🎴 <b>BINGO CARD</b>
+Each player receives a private 5×5 card containing numbers from 1 to 25. Your card uses interactive buttons for selecting and marking numbers.
+
+🔢 <b>GAMEPLAY</b>
+Players take turns calling numbers. When a called number is available on your card, use its button to mark it and increase your Bingo progress.
+
+🏆 <b>HOW TO WIN</b>
+The first player to complete 5 Bingo lines wins the match. Lines can be completed horizontally, vertically, or diagonally.
+
+💰 <b>REWARDS</b>
+Winning a match rewards you with 500 🪙 coins. Your wins, losses, streak and other game statistics are saved automatically.
+
+📋 <b>COMMANDS</b>
+🎮 /bingo — Create a new match
+👤 /profile — View your profile and statistics
+🏆 /leaderboard — View the top players
+🎁 /give — Transfer coins to another player
+❓ /help — Open this game guide
+🛑 /stopbingo — Stop active rooms (Admin)
+❌ /cancel — Cancel or forfeit your current game
+
+📌 <b>IMPORTANT</b>
+Start the bot privately with /start before playing. This allows the bot to send your private Bingo card and game controls.
+
+💡 <b>QUICK TIP</b>
+Keep your private Bingo card open while playing so you can quickly mark numbers and follow your progress.
+
+🔥 Good luck and become the Bingo Champion! 🏆
+""".strip()
+    await update.message.reply_text(text, parse_mode="HTML", disable_web_page_preview=True)
+
 
 async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -647,11 +639,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_leaderboard_callback(update, context)
     elif data == "start_help":
         user = query.from_user
-        # Send the HELP photo and text together as one message.
-        text = await _build_help_text(user)
-        await _send_photo_with_text(
-            query.message, os.getenv("HELP_PHOTO_URL", "").strip(), text
-        )
+        text = f"""❓ <b>VELOCITY BINGO — HOW TO PLAY</b>\n\n🎮 <b>1. CREATE A MATCH</b>\nUse /bingo in a group to create a room, then let another player join using the Join button.\n\n🎴 <b>2. GET YOUR CARD</b>\nBoth players receive a private 5×5 Bingo card containing numbers from 1 to 25.\n\n🔢 <b>3. PLAY YOUR TURN</b>\nPlayers take turns calling numbers. Mark available called numbers on your private card using the buttons.\n\n🏆 <b>4. WIN THE MATCH</b>\nComplete 5 horizontal, vertical, or diagonal Bingo lines before your opponent to win.\n\n💰 <b>5. EARN REWARDS</b>\nA match victory rewards 500 🪙 coins, and your game statistics are updated automatically.\n\n📋 <b>MAIN COMMANDS</b>\n🎮 /bingo — Create a match\n👤 /profile — View your stats\n🏆 /leaderboard — Top players\n🎁 /give — Transfer coins\n❌ /cancel — Cancel/forfeit a game\n🛑 /stopbingo — Admin room control\n\n💡 <b>TIP:</b> Start the bot privately with /start before playing so your private card can be delivered to you."""
+        try:
+            await query.message.edit_text(text, parse_mode="HTML", reply_markup=await _build_start_keyboard(context), disable_web_page_preview=True)
+        except BadRequest:
+            pass
         await query.answer()
     else:
         await query.answer()

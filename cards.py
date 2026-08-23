@@ -1,0 +1,142 @@
+import random
+from typing import List, Optional
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from models import ALL_LINES, BINGO_LETTERS, LINES_TO_WIN
+
+
+def generate_card() -> List[int]:
+    numbers = list(range(1, 26))
+    random.shuffle(numbers)
+    return numbers
+
+
+def count_completed_lines(numbers: List[int], marked: List[int]) -> int:
+    count = 0
+    for line in ALL_LINES:
+        if all(numbers[i] in marked for i in line):
+            count += 1
+    return count
+
+
+def get_bingo_status(completed_lines: int) -> str:
+    return " ".join(
+        f"✅{letter}" if i < completed_lines else f"❌{letter}"
+        for i, letter in enumerate(BINGO_LETTERS)
+    )
+
+
+def build_dm_card_text(
+    room_number: int,
+    player_name: str,
+    opponent_name: str,
+    numbers: List[int],
+    marked: List[int],
+    completed_lines: int,
+    called_numbers: List[int],
+    is_my_turn_to_call: bool,
+    need_to_mark: bool,
+    last_called: Optional[int],
+) -> str:
+    bingo = get_bingo_status(completed_lines)
+    called_str = " • ".join(str(n) for n in called_numbers) if called_numbers else "None"
+
+    if is_my_turn_to_call:
+        action = "🎯 <b>Your turn!</b> Tap a number below to call it."
+    elif need_to_mark:
+        action = f"⚡ <b>Mark number {last_called}!</b> Find and tap it on your card."
+    else:
+        action = f"⏳ Waiting for <b>{opponent_name}</b>..."
+
+    rows_text = []
+    for r in range(5):
+        parts = []
+        for c in range(5):
+            num = numbers[r * 5 + c]
+            if num in marked:
+                parts.append(f"✅{num:2}")
+            elif num == last_called and need_to_mark:
+                parts.append(f"⚡{num:2}")
+            else:
+                parts.append(f"  {num:2}")
+        rows_text.append("  ".join(parts))
+    grid = "\n".join(rows_text)
+
+    return (
+        f"🎮 <b>Velocity Bingo — Room #{room_number}</b>\n"
+        f"👤 You: <b>{player_name}</b>  |  👥 Opponent: <b>{opponent_name}</b>\n"
+        f"────────────────────\n"
+        f"📋 Called: {called_str}\n"
+        f"🔤 {bingo}  ✅ Lines: {completed_lines}/{LINES_TO_WIN}\n"
+        f"────────────────────\n\n"
+        f"<code>{grid}</code>\n\n"
+        f"{action}"
+    )
+
+
+def build_dm_card_keyboard(
+    room_id: str,
+    numbers: List[int],
+    marked: List[int],
+    called_numbers: List[int],
+    last_called: Optional[int],
+    is_my_turn_to_call: bool,
+    need_to_mark: bool,
+) -> InlineKeyboardMarkup:
+    rows = []
+    for r in range(5):
+        row = []
+        for c in range(5):
+            num = numbers[r * 5 + c]
+            if num in marked:
+                label = f"✅{num}"
+            elif num == last_called and need_to_mark:
+                label = f"⚡{num}"
+            else:
+                label = str(num)
+            row.append(InlineKeyboardButton(label, callback_data=f"card:{room_id}:{num}"))
+        rows.append(row)
+    return InlineKeyboardMarkup(rows)
+
+    # ── Cancel / Forfeit button ────────────────────────────────────────────
+    # Free cancel while the first 5 (or fewer) numbers have been called.
+    # After the 5th number the button becomes a paid forfeit (−500 coins).
+    num_called = len(called_numbers)
+    if num_called <= 5:
+        rows.append([
+            InlineKeyboardButton(
+                "❌ Cancel Game",
+                callback_data=f"cancel_game:{room_id}",
+            )
+        ])
+    else:
+        rows.append([
+            InlineKeyboardButton(
+                "🏳️ Forfeit Match (−500 🪙)",
+                callback_data=f"forfeit_ask:{room_id}",
+            )
+        ])
+
+
+def build_group_turn_text(room_number: int, player_name: str, opponent_name: str,
+                          phase: str, last_called: Optional[int]) -> str:
+    if phase == "call":
+        return (
+            f"🎯 <b>{player_name}</b> — it's your turn to call a number!\n"
+            f"Tap <b>Open My Card</b> to see your numbers and make your move."
+        )
+    else:
+        return (
+            f"⚡ <b>{player_name}</b> — mark number <b>{last_called}</b>!\n"
+            f"Tap <b>Open My Card</b> to mark it on your private card."
+        )
+
+
+def build_group_turn_keyboard(bot_username: str, support_channel: str = "") -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton("📩 Open My Card", url=f"https://t.me/{bot_username}")]]
+    if support_channel:
+        rows.append([InlineKeyboardButton("📢 Support Channel", url=support_channel)])
+    return InlineKeyboardMarkup(rows)
+
+
+def build_group_waiting_text(room_number: int, waiting_name: str) -> str:
+    return f"⏳ <b>{waiting_name}</b> is making their move... Please wait."
