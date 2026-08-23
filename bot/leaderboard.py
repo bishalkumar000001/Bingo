@@ -95,13 +95,13 @@ async def build_leaderboard_text(
         coins = row.get("coins", 0)
         
         if rank == 1:
-            lines.append(f"🥇 <b>{name}</b> <b>${coins:,}</b>")
+            lines.append(f"🥇 <b>{name}</b> <b>$ {coins:,}</b>")
         elif rank == 2:
-            lines.append(f"🥈 <b>{name}</b> <b>${coins:,}</b>")
+            lines.append(f"🥈 <b>{name}</b> <b>$ {coins:,}</b>")
         elif rank == 3:
-            lines.append(f"🥉 <b>{name}</b> <b>${coins:,}</b>")
+            lines.append(f"🥉 <b>{name}</b> <b>$ {coins:,}</b>")
         else:
-            lines.append(f"{rank}. <b>{name}</b> <b>${coins:,}</b>")
+            lines.append(f"{rank}. <b>{name}</b> <b>$ {coins:,}</b>")
     
     lines.append("</blockquote>")
     return "\n".join(lines)
