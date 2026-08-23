@@ -72,7 +72,19 @@ async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    image = await build_profile_image(player)
+    # Fetch the user's current Telegram profile photo for the profile card.
+    avatar_bytes = None
+    try:
+        photos = await context.bot.get_user_profile_photos(user.id, limit=1)
+        if photos.total_count and photos.photos:
+            largest_photo = photos.photos[0][-1]
+            photo_file = await largest_photo.get_file()
+            avatar_bytes = bytes(await photo_file.download_as_bytearray())
+    except Exception:
+        # If Telegram does not provide a profile photo, use the default avatar.
+        avatar_bytes = None
+
+    image = await build_profile_image(player, avatar_bytes)
     text = build_profile_text(player)
 
     await update.message.reply_photo(

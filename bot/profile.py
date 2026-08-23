@@ -1,5 +1,5 @@
 from io import BytesIO
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from database import get_user_rank
 
@@ -26,7 +26,7 @@ def _rounded(draw, box, radius, fill=None, outline=None, width=1):
     draw.rounded_rectangle(box, radius=radius, fill=fill, outline=outline, width=width)
 
 
-async def build_profile_image(player: dict) -> BytesIO:
+async def build_profile_image(player: dict, avatar_bytes: bytes | None = None) -> BytesIO:
     """Create a rectangular neon profile card from live player data."""
     width, height = 1200, 820
     image = Image.new("RGB", (width, height), "#070814")
@@ -71,12 +71,37 @@ async def build_profile_image(player: dict) -> BytesIO:
     rank = await get_user_rank(int(player.get("telegram_id", 0) or 0))
     rank_text = f"#{rank}" if rank else "UNRANKED"
 
-    # Avatar placeholder.
+    # User profile photo inside the left circular avatar.
     avatar_box = (70, 220, 320, 470)
-    draw.ellipse(avatar_box, fill="#101633", outline="#5a62ff", width=7)
-    # Simple person icon.
-    draw.ellipse((145, 270, 245, 370), fill="#4c77df")
-    _rounded(draw, (105, 375, 285, 455), 75, fill="#493bb7")
+    avatar_size = avatar_box[2] - avatar_box[0]
+    avatar_drawn = False
+
+    if avatar_bytes:
+        try:
+            avatar = Image.open(BytesIO(avatar_bytes)).convert("RGB")
+            # Center-crop the Telegram profile photo to a square.
+            avatar = ImageOps.fit(
+                avatar,
+                (avatar_size, avatar_size),
+                method=Image.Resampling.LANCZOS,
+                centering=(0.5, 0.5),
+            )
+            mask = Image.new("L", (avatar_size, avatar_size), 0)
+            mask_draw = ImageDraw.Draw(mask)
+            mask_draw.ellipse((0, 0, avatar_size - 1, avatar_size - 1), fill=255)
+            image.paste(avatar, (avatar_box[0], avatar_box[1]), mask)
+            avatar_drawn = True
+        except Exception:
+            avatar_drawn = False
+
+    # Fallback avatar when the user has no Telegram profile photo.
+    if not avatar_drawn:
+        draw.ellipse(avatar_box, fill="#101633")
+        draw.ellipse((145, 270, 245, 370), fill="#4c77df")
+        _rounded(draw, (105, 375, 285, 455), 75, fill="#493bb7")
+
+    # Neon border around the circular profile photo.
+    draw.ellipse(avatar_box, outline="#5a62ff", width=7)
 
     # Identity panel.
     _rounded(draw, (355, 225, 735, 330), 20, fill="#111833", outline="#2b9eff", width=2)
