@@ -4,6 +4,7 @@ from datetime import datetime, timezone, timedelta
 
 import motor.motor_asyncio
 from bson import ObjectId
+from pymongo.errors import OperationFailure
 
 MONGODB_URI = os.environ.get("MONGODB_URI", "mongodb://localhost:27017")
 DB_NAME = "velocity_bingo"
@@ -45,7 +46,20 @@ async def init_db():
     await db["game_results"].create_index([("chat_id", 1), ("created_at", -1)])
     await db["game_results"].create_index([("won", 1), ("created_at", -1)])
     await db["tournaments"].create_index([("status", 1), ("created_at", -1)])
-    await db["tournaments"].create_index("tournament_id", unique=True)
+    # Older deployments may contain placeholder tournament documents with a
+    # null/missing tournament_id. A normal unique index treats all null values
+    # as duplicates and crashes startup. Replace that legacy index with a
+    # partial unique index that only indexes valid tournament IDs.
+    try:
+        await db["tournaments"].drop_index("tournament_id_1")
+    except OperationFailure:
+        pass
+    await db["tournaments"].create_index(
+        "tournament_id",
+        name="tournament_id_1",
+        unique=True,
+        partialFilterExpression={"tournament_id": {"$type": "string"}},
+    )
     await db["tournament_matches"].create_index([("tournament_id", 1), ("round", 1)])
     await db["tournament_matches"].create_index(
         [("tournament_id", 1), ("round", 1), ("match_number", 1)], unique=True
