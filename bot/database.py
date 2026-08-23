@@ -44,6 +44,12 @@ async def init_db():
     await db["game_results"].create_index([("telegram_id", 1), ("created_at", -1)])
     await db["game_results"].create_index([("chat_id", 1), ("created_at", -1)])
     await db["game_results"].create_index([("won", 1), ("created_at", -1)])
+    await db["tournaments"].create_index([("status", 1), ("created_at", -1)])
+    await db["tournaments"].create_index("tournament_id", unique=True)
+    await db["tournament_matches"].create_index([("tournament_id", 1), ("round", 1)])
+    await db["tournament_matches"].create_index(
+        [("tournament_id", 1), ("round", 1), ("match_number", 1)], unique=True
+    )
 
 
 async def get_user(telegram_id: int) -> Optional[Dict]:
@@ -65,6 +71,10 @@ async def create_user(telegram_id: int, username: str, first_name: str):
             "losses": 0,
             "current_streak": 0,
             "longest_streak": 0,
+             "tournaments_joined": 0,
+             "tournament_wins": 0,
+             "tournament_matches_played": 0,
+             "tournament_matches_won": 0,
             "created_at": datetime.now(timezone.utc),
         }},
         upsert=True,
@@ -101,7 +111,8 @@ async def is_player_in_active_room(player_id: int) -> bool:
 
 
 async def create_room(chat_id: int, room_number: int, player1_id: int,
-                      room_message_id: int, stake_amount: int = 0) -> str:
+                      room_message_id: int, stake_amount: int = 0,
+                      tournament_id: str = None, tournament_match_id: str = None) -> str:
     result = await _col("rooms").insert_one({
         "room_number": room_number,
         "chat_id": chat_id,
@@ -117,6 +128,8 @@ async def create_room(chat_id: int, room_number: int, player1_id: int,
         "group_panel_message_id": None,
         "room_message_id": room_message_id,
         "stake_amount": stake_amount,
+        "tournament_id": tournament_id,
+        "tournament_match_id": tournament_match_id,
         "created_at": datetime.now(timezone.utc),
     })
     return str(result.inserted_id)
@@ -251,29 +264,6 @@ async def get_leaderboard_filtered(
     return await cursor.to_list(length=limit)
 
 
-async def get_user_rank_from_player(player: Dict) -> int:
-    """Return rank using an already-loaded player document (one DB query instead of two)."""
-    if not player or int(player.get("games_played", 0) or 0) <= 0:
-        return 0
-
-    coins = int(player.get("coins", 0) or 0)
-    wins = int(player.get("wins", 0) or 0)
-    ahead = await _col("users").count_documents({
-        "games_played": {"$gt": 0},
-        "$or": [
-            {"coins": {"$gt": coins}},
-            {"coins": coins, "wins": {"$gt": wins}},
-        ],
-    })
-    return int(ahead) + 1
-
-
-async def get_user_rank(telegram_id: int) -> int:
-    """Return the player's global rank by coins, then wins. Returns 0 if unranked."""
-    user = await _col("users").find_one({"telegram_id": telegram_id})
-    return await get_user_rank_from_player(_to_dict(user) if user else {})
-
-
 async def update_user_stats(telegram_id: int, won: bool, coins_delta: int):
     user = await get_user(telegram_id)
     if not user:
@@ -314,10 +304,11 @@ async def cancel_room(room_id: str):
 
 
 async def finish_room(room_id: str):
-    await _col("rooms").update_one(
-        {"_id": _oid(room_id)},
+    result = await _col("rooms").update_one(
+        {"_id": _oid(room_id), "status": "playing"},
         {"$set": {"status": "finished"}},
     )
+    return result.modified_count == 1
 
 
 async def get_player_active_room(player_id: int) -> Optional[Dict]:
@@ -361,3 +352,152 @@ async def find_user_by_username(username: str) -> Optional[Dict]:
     """Find a user by username."""
     doc = await _col("users").find_one({"username": username})
     return _to_dict(doc)
+
+
+# Tournament persistence.  Bracket state lives in MongoDB, not in asyncio tasks,
+# so a process restart cannot erase a tournament or strand a participant.
+async def create_tournament(tournament_id: str, name: str, creator_id: int,
+                            entry_fee: int, max_players: int, prize: int,
+                            chat_id: int) -> Optional[Dict]:
+    doc = {
+        "tournament_id": tournament_id, "name": name, "creator_id": creator_id,
+        "chat_id": chat_id, "entry_fee": entry_fee, "max_players": max_players,
+        "prize": prize, "participants": [], "status": "registration",
+        "current_round": 0, "winner_id": None, "prize_awarded": False,
+        "created_at": datetime.now(timezone.utc), "started_at": None,
+    }
+    try:
+        result = await _col("tournaments").insert_one(doc)
+    except Exception:
+        return None
+    doc["id"] = str(result.inserted_id)
+    return doc
+
+
+async def get_tournament(tournament_id: str) -> Optional[Dict]:
+    return _to_dict(await _col("tournaments").find_one({"tournament_id": tournament_id}))
+
+
+async def get_tournaments(statuses=None, limit=10) -> List[Dict]:
+    query = {"status": {"$in": statuses}} if statuses else {}
+    docs = await _col("tournaments").find(query).sort("created_at", -1).to_list(length=limit)
+    return [_to_dict(d) for d in docs]
+
+
+async def join_tournament(tournament_id: str, player_id: int, entry_fee: int) -> str:
+    # The conditional update makes joining and charging a single atomic operation.
+    result = await _col("users").update_one(
+        {"telegram_id": player_id, "coins": {"$gte": entry_fee}},
+        {"$inc": {"coins": -entry_fee}},
+    )
+    if result.matched_count != 1:
+        return "insufficient"
+    result = await _col("tournaments").update_one(
+        {"tournament_id": tournament_id, "status": "registration",
+         "participants": {"$not": {"$elemMatch": {"id": player_id}}},
+         "$expr": {"$lt": [{"$size": "$participants"}, "$max_players"]}},
+        {"$push": {"participants": {"id": player_id, "eliminated": False}},
+         "$inc": {"participant_count": 1}},
+    )
+    if result.modified_count == 1:
+        await _col("users").update_one({"telegram_id": player_id},
+                                       {"$inc": {"tournaments_joined": 1}})
+        return "joined"
+    # Full/already joined/race: never keep an accidental charge.
+    await _col("users").update_one({"telegram_id": player_id}, {"$inc": {"coins": entry_fee}})
+    current = await get_tournament(tournament_id)
+    if not current:
+        return "missing"
+    if current["status"] != "registration":
+        return "started"
+    if any(p["id"] == player_id for p in current.get("participants", [])):
+        return "already"
+    return "full"
+
+
+async def leave_tournament(tournament_id: str, player_id: int):
+    t = await get_tournament(tournament_id)
+    if not t or t["status"] != "registration":
+        return False
+    result = await _col("tournaments").update_one(
+        {"tournament_id": tournament_id, "status": "registration"},
+        {"$pull": {"participants": {"id": player_id}}, "$inc": {"participant_count": -1}},
+    )
+    if result.modified_count:
+        await _col("users").update_one({"telegram_id": player_id},
+                                       {"$inc": {"coins": t["entry_fee"]}})
+        return True
+    return False
+
+
+async def set_tournament_started(tournament_id: str, round_number: int):
+    await _col("tournaments").update_one(
+        {"tournament_id": tournament_id, "status": "registration"},
+        {"$set": {"status": "in_progress", "current_round": round_number,
+                  "started_at": datetime.now(timezone.utc)}},
+    )
+
+
+async def create_tournament_match(tournament_id, round_number, match_number,
+                                  player1_id, player2_id, status="pending", winner_id=None):
+    result = await _col("tournament_matches").insert_one({
+        "tournament_id": tournament_id, "round": round_number,
+        "match_number": match_number, "player1_id": player1_id,
+        "player2_id": player2_id, "status": status, "winner_id": winner_id,
+        "room_id": None, "loser_id": None, "created_at": datetime.now(timezone.utc),
+    })
+    return str(result.inserted_id)
+
+
+async def get_tournament_matches(tournament_id, round_number=None):
+    query = {"tournament_id": tournament_id}
+    if round_number is not None:
+        query["round"] = round_number
+    docs = await _col("tournament_matches").find(query).sort("match_number", 1).to_list(length=1000)
+    return [_to_dict(d) for d in docs]
+
+
+async def update_tournament_match(match_id, **fields):
+    await _col("tournament_matches").update_one({"_id": _oid(match_id)}, {"$set": fields})
+
+
+async def claim_tournament_match(match_id: str) -> bool:
+    result = await _col("tournament_matches").update_one(
+        {"_id": _oid(match_id), "status": "pending"}, {"$set": {"status": "playing"}}
+    )
+    return result.modified_count == 1
+
+
+async def update_tournament_round(tournament_id: str, round_number: int):
+    await _col("tournaments").update_one(
+        {"tournament_id": tournament_id}, {"$set": {"current_round": round_number}}
+    )
+
+
+async def mark_tournament_eliminated(tournament_id: str, player_id: int):
+    await _col("tournaments").update_one(
+        {"tournament_id": tournament_id, "participants.id": player_id},
+        {"$set": {"participants.$.eliminated": True}},
+    )
+
+
+async def finish_tournament_match(match_id, winner_id, loser_id):
+    return (await _col("tournament_matches").update_one(
+        {"_id": _oid(match_id), "status": {"$in": ["pending", "playing"]}},
+        {"$set": {"status": "completed", "winner_id": winner_id, "loser_id": loser_id}},
+    )).modified_count == 1
+
+
+async def award_tournament_prize(tournament_id, winner_id):
+    result = await _col("tournaments").update_one(
+        {"tournament_id": tournament_id, "status": "in_progress", "prize_awarded": False},
+        {"$set": {"status": "completed", "winner_id": winner_id, "prize_awarded": True}},
+    )
+    if result.modified_count:
+        await _col("users").update_one(
+            {"telegram_id": winner_id},
+            {"$inc": {"coins": (await get_tournament(tournament_id))["prize"],
+                      "tournament_wins": 1}},
+        )
+        return True
+    return False
