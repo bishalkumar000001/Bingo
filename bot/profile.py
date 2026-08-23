@@ -162,9 +162,10 @@ async def build_profile_image(player: dict, avatar_bytes=None) -> BytesIO:
     draw.text((width // 2, 780), "✦ Keep playing and climb the rankings! 🚀", font=footer_font, anchor="mm", fill="#e4e8ff")
 
     output = BytesIO()
-    output.name = "velocity_bingo_profile.png"
-    # Fast PNG encoding: avoids the expensive optimizer while keeping the card sharp.
-    image.save(output, format="PNG", optimize=False, compress_level=1)
+    output.name = "velocity_bingo_profile.jpg"
+    # Render once at full detail, then downscale and use JPEG for a much smaller Telegram upload.
+    image = image.resize((900, 615), Image.Resampling.LANCZOS)
+    image.save(output, format="JPEG", quality=82, optimize=False, progressive=False)
     output.seek(0)
     return output
 

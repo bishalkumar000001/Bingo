@@ -10,37 +10,12 @@ BINGO_LETTERS = ["B", "I", "N", "G", "O"]
 
 MAX_ROOMS_PER_CHAT = 3
 
-# Support one or multiple owners.
-# Preferred Heroku Config Var:
-# OWNER_IDS=123456789,987654321
-# OWNER_ID is kept as a backwards-compatible fallback.
-_owner_ids_raw = os.environ.get("OWNER_IDS", "")
-OWNER_IDS = set()
-for _value in _owner_ids_raw.replace(";", ",").split(","):
-    _value = _value.strip()
-    if _value.isdigit():
-        OWNER_IDS.add(int(_value))
-
-_legacy_owner = os.environ.get("OWNER_ID", "").strip()
-if _legacy_owner.isdigit():
-    OWNER_IDS.add(int(_legacy_owner))
-
-# Backwards compatibility for code that still imports OWNER_ID.
-OWNER_ID = next(iter(OWNER_IDS), 0)
+OWNER_ID = int(os.environ.get("OWNER_ID", "0"))
 
 _logger = os.environ.get("LOGGER_GROUP_ID", "")
 LOGGER_GROUP_ID = int(_logger) if _logger else None
 
 SUPPORT_CHANNEL = os.environ.get("SUPPORT_CHANNEL", "")
-
-_tgroup = os.environ.get("TOURNAMENT_GROUP_ID", "").strip()
-try:
-    TOURNAMENT_GROUP_ID = int(_tgroup) if _tgroup else None
-except ValueError:
-    TOURNAMENT_GROUP_ID = _tgroup or None
-
-TOURNAMENT_CHANNEL = os.environ.get("TOURNAMENT_CHANNEL", "").strip()
-OWNER_CONTACT_URL = os.environ.get("OWNER_CONTACT_URL", SUPPORT_CHANNEL or "https://t.me/").strip()
 
 ALL_LINES = [
     [0, 1, 2, 3, 4],
