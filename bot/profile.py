@@ -1,7 +1,7 @@
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
 
-from database import get_user_rank
+from database import get_user_rank_from_player
 
 
 def _font(size: int, bold: bool = False):
@@ -78,7 +78,7 @@ async def build_profile_image(player: dict, avatar_bytes=None) -> BytesIO:
     streak = int(player.get("current_streak", 0) or 0)
     longest = int(player.get("longest_streak", 0) or 0)
     win_rate = (wins / games * 100) if games else 0.0
-    rank = await get_user_rank(int(player.get("telegram_id", 0) or 0))
+    rank = await get_user_rank_from_player(player)
     rank_text = f"#{rank}" if rank else "UNRANKED"
 
     # Automatically resize long usernames so they never get cut off.
@@ -163,7 +163,8 @@ async def build_profile_image(player: dict, avatar_bytes=None) -> BytesIO:
 
     output = BytesIO()
     output.name = "velocity_bingo_profile.png"
-    image.save(output, format="PNG", optimize=True)
+    # Fast PNG encoding: avoids the expensive optimizer while keeping the card sharp.
+    image.save(output, format="PNG", optimize=False, compress_level=1)
     output.seek(0)
     return output
 

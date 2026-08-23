@@ -180,7 +180,8 @@ async def build_leaderboard_image(
 
     output = BytesIO()
     output.name = "velocity_bingo_top10.png"
-    image.save(output, format="PNG", optimize=True)
+    # Fast PNG encoding: avoids the expensive optimizer while keeping text crisp.
+    image.save(output, format="PNG", optimize=False, compress_level=1)
     output.seek(0)
     return output
 

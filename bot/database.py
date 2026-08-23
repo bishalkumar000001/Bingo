@@ -251,14 +251,13 @@ async def get_leaderboard_filtered(
     return await cursor.to_list(length=limit)
 
 
-async def get_user_rank(telegram_id: int) -> int:
-    """Return the player's global rank by coins, then wins. Returns 0 if unranked."""
-    user = await _col("users").find_one({"telegram_id": telegram_id})
-    if not user or int(user.get("games_played", 0) or 0) <= 0:
+async def get_user_rank_from_player(player: Dict) -> int:
+    """Return rank using an already-loaded player document (one DB query instead of two)."""
+    if not player or int(player.get("games_played", 0) or 0) <= 0:
         return 0
 
-    coins = int(user.get("coins", 0) or 0)
-    wins = int(user.get("wins", 0) or 0)
+    coins = int(player.get("coins", 0) or 0)
+    wins = int(player.get("wins", 0) or 0)
     ahead = await _col("users").count_documents({
         "games_played": {"$gt": 0},
         "$or": [
@@ -267,6 +266,12 @@ async def get_user_rank(telegram_id: int) -> int:
         ],
     })
     return int(ahead) + 1
+
+
+async def get_user_rank(telegram_id: int) -> int:
+    """Return the player's global rank by coins, then wins. Returns 0 if unranked."""
+    user = await _col("users").find_one({"telegram_id": telegram_id})
+    return await get_user_rank_from_player(_to_dict(user) if user else {})
 
 
 async def update_user_stats(telegram_id: int, won: bool, coins_delta: int):
