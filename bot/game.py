@@ -212,20 +212,12 @@ async def update_group_turn_panel(
 
 async def update_live_message(context, room, p1, p2):
     text = build_live_message(room, p1, p2)
-    if not room.get("live_message_id"):
-        if await _try_edit(
-            context,
-            room["chat_id"],
-            room["live_message_id"],
-            text,
-        ):
+    if room.get("live_message_id"):
+        if await _try_edit(context, room["chat_id"], room["live_message_id"], text):
             return
     try:
-        msg = await context.bot.edit_message_text(
-            chat_id=room["chat_id"],
-            text=text,
-            parse_mode="HTML",
-        )
+        msg = await context.bot.send_message(chat_id=room["chat_id"], text=text, parse_mode="HTML")
+        await db.update_room(room["id"], live_message_id=msg.message_id)
     except BadRequest:
         pass
 
@@ -489,12 +481,9 @@ async def handle_card_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         marker_id = room["player2_id"] if player_id == room["player1_id"] else room["player1_id"]
         marker_name = p2_name if player_id == room["player1_id"] else p1_name
 
-        # After the opponent marks the called number, the opponent becomes the caller.
-        # Refresh BOTH cards.  The previous code refreshed the same player's card twice,
-        # so the other player's card could stay visually stale.
         await asyncio.gather(
-            send_dm_card(context, room, player_id, marker_name, caller_name, True, False),
-            send_dm_card(context, room, other_id, caller_name, marker_name, False, False),
+            send_dm_card(context, room, player_id, caller_name, marker_name, False, False),
+            send_dm_card(context, room, marker_id, marker_name, caller_name, False, True),
         )
 
         room = await db.get_room(room_id)
@@ -504,7 +493,7 @@ async def handle_card_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         await update_group_turn_panel(
             context,
             room,
-            player_id,
+            marker_id,
             marker_name,
             caller_name,
         )
@@ -567,7 +556,8 @@ async def handle_card_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 async def handle_bingo_win(context, room, winner_id, p1, p2, called):
     chat_id = room["chat_id"]
     loser_id = room["player2_id"] if winner_id == room["player1_id"] else room["player1_id"]
-    await db.finish_room(room["id"])
+    if not await db.finish_room(room["id"]):
+        return
     if room.get("last_call_message_id"):
         try:
             await context.bot.delete_message(
@@ -599,6 +589,8 @@ async def handle_bingo_win(context, room, winner_id, p1, p2, called):
         award_winner(winner_id, chat_id),
         record_loss(loser_id, chat_id),
     )
+    from tournament import record_match_result
+    await record_match_result(context, room, winner_id, loser_id)
 
     winner = p1 if winner_id == room["player1_id"] else p2
     loser = p2 if winner_id == room["player1_id"] else p1
@@ -718,6 +710,11 @@ async def _end_game_by_cancellation(context, room: dict, forfeiter_id: int, forf
     """Shared logic: close the room and clean up messages after a free cancel or forfeit."""
     chat_id = room["chat_id"]
     await db.cancel_room(room["id"])
+    if room.get("tournament_id") and room.get("tournament_match_id"):
+        opponent_id = (room["player2_id"] if forfeiter_id == room["player1_id"]
+                       else room["player1_id"])
+        from tournament import record_match_result
+        await record_match_result(context, room, opponent_id, forfeiter_id)
     for mid_key in ("live_message_id", "last_call_message_id", "group_panel_message_id"):
         mid = room.get(mid_key)
         if mid:
