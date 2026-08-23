@@ -4,7 +4,7 @@ from datetime import datetime, timezone, timedelta
 
 import motor.motor_asyncio
 from bson import ObjectId
-from pymongo.errors import OperationFailure
+from pymongo.errors import DuplicateKeyError, OperationFailure
 
 MONGODB_URI = os.environ.get("MONGODB_URI", "mongodb://localhost:27017")
 DB_NAME = "velocity_bingo"
@@ -61,9 +61,31 @@ async def init_db():
         partialFilterExpression={"tournament_id": {"$type": "string"}},
     )
     await db["tournament_matches"].create_index([("tournament_id", 1), ("round", 1)])
-    await db["tournament_matches"].create_index(
-        [("tournament_id", 1), ("round", 1), ("match_number", 1)], unique=True
-    )
+    try:
+        await db["tournament_matches"].drop_index(
+            "tournament_id_1_round_1_match_number_1"
+        )
+    except OperationFailure:
+        pass
+    try:
+        await db["tournament_matches"].create_index(
+            [("tournament_id", 1), ("round", 1), ("match_number", 1)],
+            name="tournament_id_1_round_1_match_number_1",
+            unique=True,
+            partialFilterExpression={
+                "tournament_id": {"$type": "string"},
+                "round": {"$type": "int"},
+                "match_number": {"$type": "int"},
+            },
+        )
+    except DuplicateKeyError:
+        # Preserve service availability if a previous interrupted deployment
+        # already created duplicate valid match rows. Application-level
+        # conditional claims still prevent duplicate live matches.
+        await db["tournament_matches"].create_index(
+            [("tournament_id", 1), ("round", 1), ("match_number", 1)],
+            name="tournament_id_1_round_1_match_number_1",
+        )
 
 
 async def get_user(telegram_id: int) -> Optional[Dict]:
