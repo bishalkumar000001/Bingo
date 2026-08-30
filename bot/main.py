@@ -73,7 +73,7 @@ Use /cancel if you cannot continue the current match. 🤝
 
 ✨ 𝗤𝘂𝗶𝗰𝗸 𝗦𝘁𝗮𝗿𝘁
 1️⃣ Start the Bot → 2️⃣ Join a Match → 3️⃣ Play → 4️⃣ Complete BINGO → 5️⃣ WIN! 🏆"""
-    buttons = [[InlineKeyboardButton("📢 Support Channel", callback_data="support_channel")]]
+    buttons = [[InlineKeyboardButton("📢 Support Channel", url=SUPPORT_CHANNEL)]] if SUPPORT_CHANNEL.startswith(("http://", "https://")) else []
     markup = InlineKeyboardMarkup(buttons)
     if via_callback:
         await update.callback_query.message.reply_text(text, reply_markup=markup)
@@ -108,11 +108,18 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /profile = for your stats
 
 👑 𝗣𝗹𝗮𝘆 • 𝗪𝗶𝗻 • 𝗕𝗲𝗰𝗼𝗺𝗲 𝘁𝗵𝗲 𝗕𝗶𝗻𝗴𝗼 𝗖𝗵𝗮𝗺𝗽𝗶𝗼𝗻! 🏆"""
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📢 Support Channel", callback_data="support_channel"),
-         InlineKeyboardButton("➕ Add Me", callback_data="add_me")],
-        [InlineKeyboardButton("ℹ️ Detail Help", callback_data="detail_help")],
-    ])
+    bot_username = context.bot.username
+    add_me_url = f"https://t.me/{bot_username}?startgroup=true" if bot_username else None
+    first_row = []
+    if SUPPORT_CHANNEL.startswith(("http://", "https://")):
+        first_row.append(InlineKeyboardButton("📢 Support Channel", url=SUPPORT_CHANNEL))
+    if add_me_url:
+        first_row.append(InlineKeyboardButton("➕ Add Me", url=add_me_url))
+    keyboard_rows = []
+    if first_row:
+        keyboard_rows.append(first_row)
+    keyboard_rows.append([InlineKeyboardButton("ℹ️ Detail Help", callback_data="detail_help")])
+    keyboard = InlineKeyboardMarkup(keyboard_rows)
     await update.message.reply_text(text, reply_markup=keyboard)
 
 
