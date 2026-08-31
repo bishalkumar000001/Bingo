@@ -192,6 +192,12 @@ The bot includes a persistent single-elimination tournament flow in MongoDB:
 5. Match winners advance automatically. The final winner receives the configured
    coin prize exactly once and the group receives the completed bracket result.
 
+To protect Telegram and MongoDB from a sudden burst of rooms, tournament matches
+run in a rolling queue. By default, up to 8 matches are active at once; when one
+finishes, the next pending match starts automatically. Set
+`TOURNAMENT_MAX_CONCURRENT_MATCHES` in Heroku Config Vars to a value from 1 to 16
+if your deployment needs a different limit.
+
 `max` is between 2 and 64. `entry` and `prize` are Bingo Coins. Omit later fields
 to use defaults; the pipe-separated format keeps tournament creation usable from
 Telegram without a multi-step conversation.

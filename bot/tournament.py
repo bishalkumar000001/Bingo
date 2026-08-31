@@ -7,6 +7,7 @@ payouts; the game rules stay in game.py.
 
 import asyncio
 import html
+import os
 import random
 from collections import defaultdict
 from typing import Optional
@@ -21,6 +22,17 @@ from utils import display_name_from_db
 
 MAX_PLAYERS = 64
 MIN_PLAYERS = 2
+
+
+def _concurrency_limit() -> int:
+    try:
+        configured = int(os.environ.get("TOURNAMENT_MAX_CONCURRENT_MATCHES", "8"))
+    except (TypeError, ValueError):
+        configured = 8
+    return max(1, min(16, configured))
+
+
+MAX_CONCURRENT_MATCHES = _concurrency_limit()
 DEFAULT_PRIZE_COINS = 5000
 DEFAULT_RULES = "Single elimination • 5 completed lines wins • Forfeit gives the win to your opponent"
 
@@ -295,8 +307,10 @@ async def _launch_pending_round(context, tournament_id: str, round_no: int):
     if not tournament:
         return
     matches = await db.get_tournament_matches(tournament_id, round_no)
+    active_count = sum(match["status"] == "active" for match in matches)
+    available_slots = max(0, MAX_CONCURRENT_MATCHES - active_count)
     for match in matches:
-        if match["status"] != "pending":
+        if match["status"] != "pending" or available_slots <= 0:
             continue
         p1 = await db.get_user(match["player1_id"])
         p2 = await db.get_user(match["player2_id"])
@@ -332,6 +346,7 @@ async def _launch_pending_round(context, tournament_id: str, round_no: int):
                 context, room_id, tournament["group_id"], p1, p2, placeholder.message_id
             )
         )
+        available_slots -= 1
 
 
 async def _announce_bracket(context, tournament_id: str, intro: str = ""):
@@ -416,7 +431,10 @@ async def handle_tournament_match_finished(
             pass
 
         round_matches = await db.get_tournament_matches(tournament_id, match["round"])
-        if any(item["status"] in ("pending", "active") for item in round_matches):
+        if any(item["status"] == "pending" for item in round_matches):
+            await _launch_pending_round(context, tournament_id, match["round"])
+            round_matches = await db.get_tournament_matches(tournament_id, match["round"])
+        if any(item["status"] == "active" for item in round_matches):
             return True
 
         winners = [item["winner_id"] for item in round_matches if item.get("winner_id")]
