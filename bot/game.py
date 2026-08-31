@@ -562,6 +562,11 @@ async def handle_card_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def handle_bingo_win(context, room, winner_id, p1, p2, called):
+    if room.get("tournament_id"):
+        from tournament import handle_tournament_match_finished
+        await handle_tournament_match_finished(context, room, winner_id, "bingo")
+        return
+
     chat_id = room["chat_id"]
     loser_id = room["player2_id"] if winner_id == room["player1_id"] else room["player1_id"]
     await db.finish_room(room["id"])
@@ -737,6 +742,14 @@ async def handle_cancel_game_callback(update: Update, context: ContextTypes.DEFA
     if user.id not in (room["player1_id"], room["player2_id"]):
         await query.answer("🚫 You are not in this game!", show_alert=True)
         return
+    if room.get("tournament_id"):
+        opponent_id = (
+            room["player2_id"] if user.id == room["player1_id"] else room["player1_id"]
+        )
+        from tournament import handle_tournament_forfeit
+        await handle_tournament_forfeit(context, room, opponent_id)
+        await query.answer("You forfeited. Your opponent advances.", show_alert=True)
+        return
     called = room.get("called_numbers") or []
     if len(called) > CANCEL_FREE_THRESHOLD:
         # Race condition: numbers were called after the button was rendered.
@@ -807,6 +820,14 @@ async def handle_forfeit_ask_callback(update: Update, context: ContextTypes.DEFA
     if user.id not in (room["player1_id"], room["player2_id"]):
         await query.answer("🚫 You are not in this game!", show_alert=True)
         return
+    if room.get("tournament_id"):
+        opponent_id = (
+            room["player2_id"] if user.id == room["player1_id"] else room["player1_id"]
+        )
+        from tournament import handle_tournament_forfeit
+        await handle_tournament_forfeit(context, room, opponent_id)
+        await query.answer("You forfeited. Your opponent advances.", show_alert=True)
+        return
     # Balance check — show error immediately, before showing the dialog
     player = await db.get_user(user.id)
     if not player or player.get("coins", 0) < FORFEIT_COST:
@@ -859,6 +880,14 @@ async def handle_forfeit_confirm_callback(update: Update, context: ContextTypes.
         return
     if user.id not in (room["player1_id"], room["player2_id"]):
         await query.answer("🚫 You are not in this game!", show_alert=True)
+        return
+    if room.get("tournament_id"):
+        opponent_id = (
+            room["player2_id"] if user.id == room["player1_id"] else room["player1_id"]
+        )
+        from tournament import handle_tournament_forfeit
+        await handle_tournament_forfeit(context, room, opponent_id)
+        await query.answer("You forfeited. Your opponent advances.", show_alert=True)
         return
     # Re-verify balance atomically and deduct — prevents bypassing via race conditions
     success = await process_forfeit(user.id, room["chat_id"])

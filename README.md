@@ -19,6 +19,11 @@ A turn-based multiplayer Bingo Telegram bot where players call numbers alternate
 | `/profile` | View your coins, wins, losses, and streaks |
 | `/leaderboard` | Top 10 players |
 | `/stopbingo` | Cancel all active rooms in the group (admins only) |
+| `/tournament create Name \| max \| entry \| prize \| rules` | Create an owner-managed knockout tournament |
+| `/tournament_start` | Lock registration and launch the bracket (owner only) |
+| `/tournament_status` | Show registration or bracket status |
+| `/playerlist` | Show registered players (owner only) |
+| `/tournament_cancel` | Cancel and refund entry fees (owner only) |
 
 ## Tech Stack
 
@@ -171,3 +176,22 @@ velocity-bingo-bot/
 - Winner earns **500 coins**
 - Forfeit with `/cancel` — opponent wins automatically
 - After a game ends, either player can click **🔄 Rematch** to play again instantly
+
+## Tournament System
+
+The bot includes a persistent single-elimination tournament flow in MongoDB:
+
+1. The owner creates a tournament in the match group:
+   `/tournament create Weekend Cup | 16 | 100 | 1500 | Single elimination`
+2. Players use the inline **Join** button. Paid entries are deducted atomically
+   from their Bingo Coins and refunded when the owner cancels registration.
+3. `/tournament_start` locks the roster, randomizes the bracket, creates first-round
+   matches, and awards byes automatically for non-power-of-two player counts.
+4. Every bracket match runs through the normal private-card Bingo engine, including
+   the existing turn validation and forfeit handling.
+5. Match winners advance automatically. The final winner receives the configured
+   coin prize exactly once and the group receives the completed bracket result.
+
+`max` is between 2 and 64. `entry` and `prize` are Bingo Coins. Omit later fields
+to use defaults; the pipe-separated format keeps tournament creation usable from
+Telegram without a multi-step conversation.

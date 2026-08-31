@@ -11,6 +11,10 @@ BINGO_LETTERS = ["B", "I", "N", "G", "O"]
 MAX_ROOMS_PER_CHAT = 3
 
 OWNER_ID = int(os.environ.get("OWNER_ID", "0"))
+OWNER_IDS = {OWNER_ID} if OWNER_ID else set()
+for _owner_value in os.environ.get("OWNER_IDS", "").replace(";", ",").split(","):
+    if _owner_value.strip().isdigit():
+        OWNER_IDS.add(int(_owner_value.strip()))
 
 _logger = os.environ.get("LOGGER_GROUP_ID", "")
 LOGGER_GROUP_ID = int(_logger) if _logger else None

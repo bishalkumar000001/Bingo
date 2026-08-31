@@ -11,7 +11,7 @@ A turn-based multiplayer Bingo Telegram Bot where players call numbers alternate
 
 - Python 3.11
 - python-telegram-bot v21.6 (async)
-- aiosqlite + SQLite (velocity_bingo.db)
+- Motor + MongoDB (the `MONGODB_URI` environment variable)
 
 ## Where things live
 
@@ -42,6 +42,11 @@ A turn-based multiplayer Bingo Telegram Bot where players call numbers alternate
 - /profile — view coins, wins, losses, streaks
 - /leaderboard — top 10 players
 - /stopbingo — admin-only: cancel all active rooms
+- /tournament create Name | max | entry | prize | rules — owner-only tournament creation
+- /tournament_start — owner-only bracket launch
+- /tournament_status — public registration/bracket status
+- /playerlist — owner-only roster
+- /tournament_cancel — owner-only cancellation with entry-fee refunds
 
 ## User preferences
 
@@ -52,6 +57,8 @@ _Populate as you build — explicit user instructions worth remembering across s
 - Players must /start the bot in DM before cards can be sent privately
 - Max 3 rooms per group, 1 active game per player
 - Bot must be added to the group to receive /bingo commands
+- Tournament matches are stored as normal rooms with `tournament_id` metadata
+  and are launched directly in the group that created the tournament
 
 ## Pointers
 

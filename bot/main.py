@@ -27,7 +27,18 @@ from game import (
 )
 from economy import award_winner, record_loss, process_forfeit
 from leaderboard import build_leaderboard_text, build_leaderboard_keyboard
-from tournament import cmd_tournament, cmd_announce_tournament, cmd_playerlist, cmd_cancel_tournament, handle_tournament_join
+from tournament import (
+    cmd_tournament,
+    cmd_tournament_start,
+    cmd_tournament_status,
+    cmd_announce_tournament,
+    cmd_playerlist,
+    cmd_cancel_tournament,
+    handle_tournament_join,
+    handle_tournament_leave,
+    handle_tournament_status_callback,
+    handle_tournament_forfeit,
+)
 from utils import display_name_from_db, display_name
 from models import LINES_TO_WIN, WIN_COINS, FORFEIT_COST, CANCEL_FREE_THRESHOLD, OWNER_ID, LOGGER_GROUP_ID, SUPPORT_CHANNEL
 
@@ -106,6 +117,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /bingo = to start the match.
 /leaderboard = rankings of the top ten users
 /profile = for your stats
+/tournament_status = view the current tournament
 
 👑 𝗣𝗹𝗮𝘆 • 𝗪𝗶𝗻 • 𝗕𝗲𝗰𝗼𝗺𝗲 𝘁𝗵𝗲 𝗕𝗶𝗻𝗴𝗼 𝗖𝗵𝗮𝗺𝗽𝗶𝗼𝗻! 🏆"""
     bot_username = context.bot.username
@@ -265,6 +277,16 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     opponent = await db.get_user(opponent_id)
     opponent_name = display_name_from_db(opponent) if opponent else "Opponent"
+
+    # Tournament matches cannot be silently cancelled: doing so would leave
+    # the knockout bracket waiting forever. A /cancel is recorded as a loss.
+    if room.get("tournament_id"):
+        await handle_tournament_forfeit(context, room, opponent_id)
+        await update.message.reply_text(
+            f"🏳️ You forfeited tournament match #{room['room_number']}.\n"
+            f"✅ {opponent_name} advances to the next round."
+        )
+        return
 
     if len(called) <= CANCEL_FREE_THRESHOLD:
         # ── Free cancel (1–5 numbers called) ──────────────────────────────
@@ -588,6 +610,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "tournament_join":
         await handle_tournament_join(update, context)
         return
+    if data.startswith("tournament_join:"):
+        await handle_tournament_join(update, context)
+        return
+    if data.startswith("tournament_leave:"):
+        await handle_tournament_leave(update, context)
+        return
+    if data.startswith("tournament_status:"):
+        await handle_tournament_status_callback(update, context)
+        return
     if data == "detail_help":
         await query.answer()
         await _send_help_message(update, context, via_callback=True)
@@ -651,6 +682,8 @@ def main():
     app.add_handler(CommandHandler("stopbingo", cmd_stopbingo))
     app.add_handler(CommandHandler("broadcast", cmd_broadcast))
     app.add_handler(CommandHandler("tournament", cmd_tournament))
+    app.add_handler(CommandHandler("tournament_start", cmd_tournament_start))
+    app.add_handler(CommandHandler("tournament_status", cmd_tournament_status))
     app.add_handler(CommandHandler("announce", cmd_announce_tournament))
     app.add_handler(CommandHandler("playerlist", cmd_playerlist))
     app.add_handler(CommandHandler("cancel_tournament", cmd_cancel_tournament))
