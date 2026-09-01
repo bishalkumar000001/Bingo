@@ -69,6 +69,10 @@ def _active_keyboard(tournament_id: str) -> InlineKeyboardMarkup:
 
 
 def _registration_text(tournament: dict, count: Optional[int] = None) -> str:
+    custom_text = tournament.get("announcement_text")
+    if custom_text:
+        return _esc(custom_text)
+
     count = count if count is not None else len(tournament.get("players", []))
     fee = int(tournament.get("entry_fee", 0) or 0)
     prize = int(tournament.get("prize_coins", 0) or 0)
@@ -297,6 +301,60 @@ async def cmd_tournament_add(update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"{tournament['max_players']}"
     )
     await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+
+async def cmd_tournament_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Set or clear the owner's custom registration announcement."""
+    if not _owner_ok(update):
+        await update.message.reply_text("❌ This command is for the bot owner only.")
+        return
+
+    tournament = await db.get_active_tournament()
+    if not tournament or tournament.get("status") != "registration":
+        await update.message.reply_text(
+            "❌ A tournament must be open for registration to edit its message."
+        )
+        return
+
+    custom_text = " ".join(context.args or []).strip()
+    if not custom_text:
+        source = getattr(update.message, "reply_to_message", None)
+        custom_text = (
+            getattr(source, "text", None)
+            or getattr(source, "caption", None)
+            or ""
+        ).strip()
+    if custom_text.lower() in {"clear", "default", "reset"}:
+        custom_text = ""
+    elif not custom_text:
+        await update.message.reply_text(
+            "Reply to the announcement you want to use and send:\n"
+            "/tournament_message\n\n"
+            "Or use /tournament_message followed by your text.\n"
+            "Use /tournament_message clear to restore the default card."
+        )
+        return
+
+    if len(custom_text) > 3500:
+        await update.message.reply_text(
+            "❌ The custom tournament message must be 3,500 characters or fewer."
+        )
+        return
+
+    await db.update_tournament(
+        tournament["id"],
+        announcement_text=custom_text,
+    )
+    tournament["announcement_text"] = custom_text
+    if tournament.get("registration_message_id"):
+        await _send_or_edit_registration(
+            context, tournament, tournament["registration_message_id"]
+        )
+    await update.message.reply_text(
+        "✅ Tournament announcement updated."
+        if custom_text
+        else "✅ Default tournament announcement restored."
+    )
 
 
 async def handle_tournament_join(update: Update, context: ContextTypes.DEFAULT_TYPE):

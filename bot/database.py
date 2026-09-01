@@ -428,6 +428,7 @@ async def create_tournament(
     created_by: int,
     entry_fee: int = 0,
     registration_message_id: Optional[int] = None,
+    announcement_text: str = "",
 ) -> Dict:
     doc = {
         "title": title,
@@ -441,6 +442,7 @@ async def create_tournament(
         "status": "registration",
         "current_round": None,
         "registration_message_id": registration_message_id,
+        "announcement_text": announcement_text or "",
         "champion": None,
         "prize_paid": False,
         "created_at": datetime.now(timezone.utc),
