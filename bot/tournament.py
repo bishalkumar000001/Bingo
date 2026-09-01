@@ -374,6 +374,106 @@ async def cmd_tournament_message(update: Update, context: ContextTypes.DEFAULT_T
     )
 
 
+async def cmd_tournament_disqualify(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+):
+    """Disqualify a player from a queued or active tournament match."""
+    if not _owner_ok(update):
+        await update.message.reply_text("❌ This command is for the bot owner only.")
+        return
+
+    tournament = await db.get_active_tournament()
+    if not tournament:
+        await update.message.reply_text("❌ No active tournament.")
+        return
+    if tournament.get("status") != "active":
+        await update.message.reply_text(
+            "❌ The tournament bracket has not started yet. "
+            "Use /tournament_add or let players join during registration."
+        )
+        return
+
+    references = list(context.args or [])
+    replied_user = getattr(
+        getattr(update.message, "reply_to_message", None), "from_user", None
+    )
+    if not references and replied_user and not replied_user.is_bot:
+        references = [str(replied_user.id)]
+    if not references:
+        await update.message.reply_text(
+            "Usage: /tournament_disqualify <telegram_id|@username>\n"
+            "You can also reply to a player's message with this command."
+        )
+        return
+
+    matches = await db.get_tournament_matches(tournament["id"])
+    results = []
+    for reference in references[:64]:
+        normalized = reference.strip()
+        if normalized.isdigit():
+            player = await db.get_user(int(normalized))
+        else:
+            player = await db.find_user_by_username(
+                normalized.removeprefix("@").strip()
+            )
+        if not player:
+            results.append(
+                f"❌ {_esc(reference)} — player not found; use their Telegram ID "
+                "or ask them to use /start first"
+            )
+            continue
+
+        match = next(
+            (
+                item
+                for item in matches
+                if item.get("status") in ("pending", "active")
+                and player["telegram_id"]
+                in (item.get("player1_id"), item.get("player2_id"))
+            ),
+            None,
+        )
+        if not match:
+            results.append(
+                f"❌ {_esc(player.get('first_name') or reference)} — "
+                "no queued or active match found"
+            )
+            continue
+
+        winner_id = (
+            match["player2_id"]
+            if player["telegram_id"] == match["player1_id"]
+            else match["player1_id"]
+        )
+        room = await db.get_room(match["room_id"]) if match.get("room_id") else None
+        if not room:
+            room = {
+                "id": None,
+                "tournament_id": tournament["id"],
+                "tournament_match_id": match["id"],
+                "chat_id": tournament["group_id"],
+                "player1_id": match["player1_id"],
+                "player2_id": match["player2_id"],
+                "room_number": f"T{match['round']}-M{match['match_number']}",
+            }
+
+        await handle_tournament_match_finished(
+            context, room, winner_id, "disqualified"
+        )
+        winner = await db.get_user(winner_id)
+        results.append(
+            f"✅ {_esc(player.get('first_name') or reference)} disqualified. "
+            f"🏆 {_esc(_name(winner))} advances."
+        )
+        matches = await db.get_tournament_matches(tournament["id"])
+
+    await update.message.reply_text(
+        "⚔️ <b>Tournament disqualification</b>\n\n"
+        + "\n".join(results),
+        parse_mode="HTML",
+    )
+
+
 async def handle_tournament_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     tournament_id = query.data.split(":", 1)[1] if ":" in query.data else None
@@ -578,7 +678,11 @@ async def handle_tournament_match_finished(
     if not tournament_id or not match_id:
         return False
     async with TOURNAMENT_LOCKS[tournament_id]:
-        match = await db.get_tournament_match_by_room(room["id"])
+        match = (
+            await db.get_tournament_match_by_room(room["id"])
+            if room.get("id")
+            else None
+        )
         if not match or match["id"] != match_id:
             match = next(
                 (m for m in await db.get_tournament_matches(tournament_id)
@@ -586,7 +690,8 @@ async def handle_tournament_match_finished(
             )
         if not match or not await db.finish_tournament_match(match["id"], winner_id, reason):
             return True
-        await db.finish_room(room["id"])
+        if room.get("id"):
+            await db.finish_room(room["id"])
         await _cleanup_match_messages(context, room)
         tournament = await db.get_tournament(tournament_id)
         if not tournament:

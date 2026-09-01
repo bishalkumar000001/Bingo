@@ -22,6 +22,7 @@ A turn-based multiplayer Bingo Telegram bot where players call numbers alternate
 | `/tournament create Name \| max \| entry \| prize \| rules` | Create an owner-managed knockout tournament |
 | `/tournament_add <id/@username>` | Manually register known players during registration (owner only) |
 | `/tournament_message` | Set a custom registration announcement by replying to a message (owner only) |
+| `/tournament_disqualify <id/@username>` | Disqualify a player and advance their opponent (owner only) |
 | `/tournament_start` | Lock registration and launch the bracket (owner only) |
 | `/tournament_status` | Show registration or bracket status |
 | `/playerlist` | Show registered players (owner only) |
@@ -193,6 +194,8 @@ The bot includes a persistent single-elimination tournament flow in MongoDB:
    the existing turn validation and forfeit handling.
 5. Match winners advance automatically. The final winner receives the configured
    coin prize exactly once and the group receives the completed bracket result.
+6. The owner can disqualify a player from a queued or active match with
+   `/tournament_disqualify <telegram_id>`; the opponent advances automatically.
 
 For a custom registration announcement, reply to the message with
 `/tournament_message`. You can place live values in that message using

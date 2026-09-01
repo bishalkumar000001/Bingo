@@ -31,6 +31,7 @@ from tournament import (
     cmd_tournament,
     cmd_tournament_add,
     cmd_tournament_message,
+    cmd_tournament_disqualify,
     cmd_tournament_start,
     cmd_tournament_status,
     cmd_announce_tournament,
@@ -714,6 +715,7 @@ def main():
     app.add_handler(CommandHandler("tournament", cmd_tournament))
     app.add_handler(CommandHandler("tournament_add", cmd_tournament_add))
     app.add_handler(CommandHandler("tournament_message", cmd_tournament_message))
+    app.add_handler(CommandHandler("tournament_disqualify", cmd_tournament_disqualify))
     app.add_handler(CommandHandler("tournament_start", cmd_tournament_start))
     app.add_handler(CommandHandler("tournament_status", cmd_tournament_status))
     app.add_handler(CommandHandler("announce", cmd_announce_tournament))
