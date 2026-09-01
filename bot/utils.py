@@ -1,4 +1,30 @@
+import asyncio
+import logging
 from typing import Optional
+
+logger = logging.getLogger(__name__)
+_background_tasks = set()
+
+
+def create_background_task(coro, *, name: str):
+    """Run a fire-and-forget coroutine without losing its exceptions."""
+    task = asyncio.create_task(coro, name=name)
+    _background_tasks.add(task)
+
+    def _on_done(completed):
+        _background_tasks.discard(completed)
+        if completed.cancelled():
+            return
+        error = completed.exception()
+        if error:
+            logger.error(
+                "Background task %s failed",
+                completed.get_name(),
+                exc_info=(type(error), error, error.__traceback__),
+            )
+
+    task.add_done_callback(_on_done)
+    return task
 
 
 def mention(user_id: int, name: str) -> str:

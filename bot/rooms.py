@@ -5,7 +5,7 @@ from telegram.error import BadRequest
 
 import database as db
 from models import MAX_ROOMS_PER_CHAT
-from utils import display_name, display_name_from_db
+from utils import create_background_task, display_name, display_name_from_db
 from game import start_game_countdown, _try_unpin
 
 
@@ -118,14 +118,23 @@ async def handle_join_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 
-    await query.answer("🎮 Joining match...")
-    await db.join_room(room_id, user.id)
+    if not await db.join_room(room_id, user.id):
+        await query.answer("This room was just joined by someone else.", show_alert=True)
+        return
     room = await db.get_room(room_id)
+    if not room or not room.get("player2_id"):
+        await query.answer("The room could not be started. Please try again.", show_alert=True)
+        return
 
     p1 = await db.get_user(room["player1_id"])
     p2 = await db.get_user(room["player2_id"])
+    if not p1 or not p2:
+        await db.cancel_room(room_id)
+        await query.answer("A player is no longer available.", show_alert=True)
+        return
+    await query.answer("🎮 Joining match...")
 
-    asyncio.create_task(
+    create_background_task(
         start_game_countdown(
             context,
             room_id=room_id,
@@ -133,7 +142,8 @@ async def handle_join_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             p1=p1,
             p2=p2,
             room_message_id=room["room_message_id"],
-        )
+        ),
+        name=f"room-countdown-{room_id}",
     )
 
 

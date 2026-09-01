@@ -14,7 +14,12 @@ _client: Optional[motor.motor_asyncio.AsyncIOMotorClient] = None
 def _get_db():
     global _client
     if _client is None:
-        _client = motor.motor_asyncio.AsyncIOMotorClient(MONGODB_URI)
+        _client = motor.motor_asyncio.AsyncIOMotorClient(
+            MONGODB_URI,
+            serverSelectionTimeoutMS=5000,
+            connectTimeoutMS=5000,
+            socketTimeoutMS=10000,
+        )
     return _client[DB_NAME]
 
 
@@ -190,11 +195,12 @@ async def update_room(room_id: str, **kwargs):
     await _col("rooms").update_one({"_id": _oid(room_id)}, {"$set": kwargs})
 
 
-async def join_room(room_id: str, player2_id: int):
-    await _col("rooms").update_one(
+async def join_room(room_id: str, player2_id: int) -> bool:
+    result = await _col("rooms").update_one(
         {"_id": _oid(room_id), "status": "waiting"},
         {"$set": {"player2_id": player2_id, "status": "playing"}},
     )
+    return result.modified_count > 0
 
 
 async def create_card(room_id: str, player_id: int, numbers: List[int]) -> str:

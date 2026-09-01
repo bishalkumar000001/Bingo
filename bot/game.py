@@ -19,7 +19,7 @@ from cards import (
 )
 from economy import award_winner, record_loss, process_forfeit
 from models import WIN_COINS, FORFEIT_COST, CANCEL_FREE_THRESHOLD, LINES_TO_WIN, LOGGER_GROUP_ID, SUPPORT_CHANNEL
-from utils import display_name_from_db, format_called_numbers
+from utils import create_background_task, display_name_from_db, format_called_numbers
 
 ROOM_LOCKS = defaultdict(asyncio.Lock)
 
@@ -105,10 +105,10 @@ async def _try_edit(context, chat_id, message_id, text, keyboard=None):
             if "Message is not modified" in str(e):
                 return True
 
-            await asynsio.sleep(0.5)
+            await asyncio.sleep(0.5)
 
         except Exception:
-            await asynsio.sleep(0.5)
+            await asyncio.sleep(0.5)
             
     return False
 
@@ -1000,8 +1000,6 @@ async def handle_rematch_callback(update: Update, context: ContextTypes.DEFAULT_
         )
         return
 
-    await query.answer("🔄 Starting rematch!")
-
     try:
         await query.edit_message_reply_markup(reply_markup=None)
     except BadRequest:
@@ -1018,9 +1016,13 @@ async def handle_rematch_callback(update: Update, context: ContextTypes.DEFAULT_
         player1_id=p1_id,
         room_message_id=placeholder.message_id,
     )
-    await db.join_room(new_room_id, p2_id)
+    if not await db.join_room(new_room_id, p2_id):
+        await db.cancel_room(new_room_id)
+        await query.answer("The rematch could not be started. Please try again.", show_alert=True)
+        return
+    await query.answer("🔄 Starting rematch!")
 
-    asyncio.create_task(
+    create_background_task(
         start_game_countdown(
             context,
             room_id=new_room_id,
@@ -1028,7 +1030,8 @@ async def handle_rematch_callback(update: Update, context: ContextTypes.DEFAULT_
             p1=p1,
             p2=p2,
             room_message_id=placeholder.message_id,
-        )
+        ),
+        name=f"rematch-countdown-{new_room_id}",
     )
 
 

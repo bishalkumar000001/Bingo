@@ -605,6 +605,8 @@ async def handle_forfeit_back_callback(update: Update, context: ContextTypes.DEF
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    if not query or not query.data:
+        return
     data = query.data
 
     if data == "tournament_join":
@@ -657,8 +659,34 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def post_init(application: Application):
-    await db.init_db()
-    logger.info("Database initialized.")
+    for attempt in range(1, 6):
+        try:
+            await db.init_db()
+            logger.info("Database initialized.")
+            return
+        except Exception:
+            logger.exception("Database initialization failed (attempt %s/5)", attempt)
+            if attempt == 5:
+                raise
+            await asyncio.sleep(min(30, 2 ** attempt))
+
+
+async def handle_error(update: object, context: ContextTypes.DEFAULT_TYPE):
+    error = context.error
+    if error:
+        logger.error(
+            "Unhandled Telegram update error",
+            exc_info=(type(error), error, error.__traceback__),
+        )
+    query = getattr(update, "callback_query", None)
+    if query:
+        try:
+            await query.answer(
+                "Something went wrong temporarily. Please try again.",
+                show_alert=True,
+            )
+        except Exception:
+            pass
 
 
 def main():
@@ -690,6 +718,7 @@ def main():
     app.add_handler(CommandHandler("give", cmd_give))
     app.add_handler(ChatMemberHandler(handle_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
     app.add_handler(CallbackQueryHandler(handle_callback))
+    app.add_error_handler(handle_error)
 
     logger.info("🎮 Velocity Bingo Bot is starting...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)

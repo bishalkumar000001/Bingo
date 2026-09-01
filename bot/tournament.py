@@ -18,7 +18,7 @@ from telegram.ext import ContextTypes
 
 import database as db
 from models import OWNER_IDS
-from utils import display_name_from_db
+from utils import create_background_task, display_name_from_db
 
 MAX_PLAYERS = 64
 MIN_PLAYERS = 2
@@ -336,15 +336,21 @@ async def _launch_pending_round(context, tournament_id: str, round_no: int):
             tournament_round=round_no,
             tournament_match_id=match["id"],
         )
-        await db.join_room(room_id, match["player2_id"])
+        if not await db.join_room(room_id, match["player2_id"]):
+            await db.cancel_room(room_id)
+            await db.finish_tournament_match(
+                match["id"], match["player1_id"], "opponent_unavailable"
+            )
+            continue
         if not await db.activate_tournament_match(match["id"], room_id):
             await db.cancel_room(room_id)
             continue
         from game import start_game_countdown
-        asyncio.create_task(
+        create_background_task(
             start_game_countdown(
                 context, room_id, tournament["group_id"], p1, p2, placeholder.message_id
-            )
+            ),
+            name=f"tournament-countdown-{room_id}",
         )
         available_slots -= 1
 
