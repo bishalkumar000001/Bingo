@@ -20,6 +20,7 @@ A turn-based multiplayer Bingo Telegram bot where players call numbers alternate
 | `/leaderboard` | Top 10 players |
 | `/stopbingo` | Cancel all active rooms in the group (admins only) |
 | `/tournament create Name \| max \| entry \| prize \| rules` | Create an owner-managed knockout tournament |
+| `/tournament_add <id/@username>` | Manually register known players during registration (owner only) |
 | `/tournament_start` | Lock registration and launch the bracket (owner only) |
 | `/tournament_status` | Show registration or bracket status |
 | `/playerlist` | Show registered players (owner only) |

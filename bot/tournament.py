@@ -200,6 +200,105 @@ async def cmd_announce_tournament(update: Update, context: ContextTypes.DEFAULT_
     await update.message.reply_text(f"📢 Tournament announced.\n✅ Sent: {sent}\n❌ Failed: {failed}")
 
 
+async def cmd_tournament_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Allow the owner to register known players during the registration phase."""
+    if not _owner_ok(update):
+        await update.message.reply_text("❌ This command is for the bot owner only.")
+        return
+
+    tournament = await db.get_active_tournament()
+    if not tournament:
+        await update.message.reply_text("❌ No active tournament.")
+        return
+    if tournament.get("status") != "registration":
+        await update.message.reply_text(
+            "❌ Players cannot be added after the tournament has started."
+        )
+        return
+
+    references = list(context.args or [])
+    replied_user = getattr(
+        getattr(update.message, "reply_to_message", None), "from_user", None
+    )
+    if not references and replied_user and not replied_user.is_bot:
+        references = [str(replied_user.id)]
+        await db.create_user(
+            replied_user.id,
+            replied_user.username or "",
+            replied_user.first_name or "",
+        )
+    if not references:
+        await update.message.reply_text(
+            "Usage: /tournament_add <telegram_id|@username> [more players...]\n"
+            "You can also reply to a player's message with /tournament_add."
+        )
+        return
+    if len(references) > MAX_PLAYERS:
+        await update.message.reply_text(
+            f"❌ You can add at most {MAX_PLAYERS} players in one command."
+        )
+        return
+
+    added = []
+    failed = []
+    for reference in references:
+        user = None
+        normalized = reference.strip()
+        if normalized.isdigit():
+            user = await db.get_user(int(normalized))
+        else:
+            username = normalized.removeprefix("@").strip()
+            if username:
+                user = await db.find_user_by_username(username)
+
+        if not user:
+            failed.append(
+                f"{_esc(reference)} — not found; ask the player to use /start first"
+            )
+            continue
+
+        result = await db.join_tournament(
+            tournament["id"],
+            user["telegram_id"],
+            user.get("username", ""),
+            user.get("first_name", ""),
+        )
+        if result["status"] == "joined":
+            added.append(
+                f"{_esc(user.get('first_name') or user.get('username') or user['telegram_id'])}"
+            )
+        elif result["status"] == "already":
+            failed.append(f"{_esc(reference)} — already registered")
+        elif result["status"] == "insufficient_funds":
+            failed.append(
+                f"{_esc(reference)} — needs {result['fee']:,} Bingo Coins"
+            )
+        elif result["status"] == "full":
+            failed.append(f"{_esc(reference)} — tournament is full")
+        else:
+            failed.append(f"{_esc(reference)} — registration is closed")
+
+    tournament = await db.get_tournament(tournament["id"])
+    if tournament and tournament.get("registration_message_id"):
+        await _send_or_edit_registration(
+            context, tournament, tournament["registration_message_id"]
+        )
+    if not tournament:
+        await update.message.reply_text("❌ The tournament is no longer available.")
+        return
+
+    lines = ["🏆 <b>Manual tournament registration</b>"]
+    if added:
+        lines.append("✅ Added: " + ", ".join(added))
+    if failed:
+        lines.append("❌ Not added:\n" + "\n".join(f"• {item}" for item in failed))
+    lines.append(
+        f"\nPlayers: {await db.count_tournament_players(tournament['id'])}/"
+        f"{tournament['max_players']}"
+    )
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+
 async def handle_tournament_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     tournament_id = query.data.split(":", 1)[1] if ":" in query.data else None
