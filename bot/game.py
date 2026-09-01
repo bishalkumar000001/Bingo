@@ -121,8 +121,10 @@ async def send_dm_card(
     opponent_name: str,
     is_my_turn_to_call: bool,
     need_to_mark: bool,
+    card: Optional[dict] = None,
 ) -> bool:
-    card = await db.get_card(room["id"], player_id)
+    if card is None:
+        card = await db.get_card(room["id"], player_id)
     if not card:
         return False
 
@@ -452,9 +454,17 @@ async def handle_card_callback(update: Update, context: ContextTypes.DEFAULT_TYP
                              last_called_number=number,
                              phase="mark")
 
-        card = await db.get_card(room_id, player_id)
+        marker_id = room["player2_id"] if player_id == room["player1_id"] else room["player1_id"]
+        card, marker_card = await asyncio.gather(
+            db.get_card(room_id, player_id),
+            db.get_card(room_id, marker_id),
+        )
+        if not card:
+            return
         new_lines = count_completed_lines(card["numbers"], card["marked_numbers"] + [number])
         await db.mark_number(card["id"], number, new_lines)
+        card["marked_numbers"] = list(dict.fromkeys(card["marked_numbers"] + [number]))
+        card["completed_lines"] = new_lines
 
         if new_lines >= LINES_TO_WIN:
             await handle_bingo_win(context, room, player_id, p1, p2, called)
@@ -486,12 +496,16 @@ async def handle_card_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         )
 
         room = await db.get_room(room_id)
-        marker_id = room["player2_id"] if player_id == room["player1_id"] else room["player1_id"]
         marker_name = p2_name if player_id == room["player1_id"] else p1_name
 
         await asyncio.gather(
-            send_dm_card(context, room, player_id, caller_name, marker_name, False, False),
-            send_dm_card(context, room, marker_id, marker_name, caller_name, False, True),
+            send_dm_card(
+                context, room, player_id, caller_name, marker_name, False, False, card=card
+            ),
+            send_dm_card(
+                context, room, marker_id, marker_name, caller_name, False, True,
+                card=marker_card,
+            ),
         )
 
         room = await db.get_room(room_id)
@@ -527,9 +541,17 @@ async def handle_card_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
         await query.answer(f"✅ Marked {number}!")
 
-        card = await db.get_card(room_id, player_id)
+        other_id = room["player2_id"] if player_id == room["player1_id"] else room["player1_id"]
+        card, other_card = await asyncio.gather(
+            db.get_card(room_id, player_id),
+            db.get_card(room_id, other_id),
+        )
+        if not card:
+            return
         new_lines = count_completed_lines(card["numbers"], card["marked_numbers"] + [number])
         await db.mark_number(card["id"], number, new_lines)
+        card["marked_numbers"] = list(dict.fromkeys(card["marked_numbers"] + [number]))
+        card["completed_lines"] = new_lines
 
         if new_lines >= LINES_TO_WIN:
             room = await db.get_room(room_id)
@@ -541,11 +563,15 @@ async def handle_card_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
         marker_name = p1_name if player_id == room["player1_id"] else p2_name
         caller_name = p2_name if player_id == room["player1_id"] else p1_name
-        other_id = room["player2_id"] if player_id == room["player1_id"] else room["player1_id"]
 
         await asyncio.gather(
-            send_dm_card(context, room, player_id, caller_name, marker_name, False, False),
-            send_dm_card(context, room, marker_id, marker_name, caller_name, False, True),
+            send_dm_card(
+                context, room, player_id, caller_name, marker_name, False, False, card=card
+            ),
+            send_dm_card(
+                context, room, other_id, marker_name, caller_name, False, True,
+                card=other_card,
+            ),
         )
 
         room = await db.get_room(room_id)
