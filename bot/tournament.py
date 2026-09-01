@@ -69,11 +69,25 @@ def _active_keyboard(tournament_id: str) -> InlineKeyboardMarkup:
 
 
 def _registration_text(tournament: dict, count: Optional[int] = None) -> str:
+    count = count if count is not None else len(tournament.get("players", []))
     custom_text = tournament.get("announcement_text")
     if custom_text:
-        return _esc(custom_text)
+        max_players = int(tournament.get("max_players", MAX_PLAYERS))
+        fee = int(tournament.get("entry_fee", 0) or 0)
+        prize = int(tournament.get("prize_coins", 0) or 0)
+        replacements = {
+            "{players}": str(count),
+            "{max_players}": str(max_players),
+            "{remaining}": str(max(0, max_players - count)),
+            "{entry_fee}": f"{fee:,}",
+            "{prize}": f"{prize:,}",
+            "{title}": str(tournament.get("title", "")),
+        }
+        rendered = custom_text
+        for placeholder, value in replacements.items():
+            rendered = rendered.replace(placeholder, value)
+        return _esc(rendered)
 
-    count = count if count is not None else len(tournament.get("players", []))
     fee = int(tournament.get("entry_fee", 0) or 0)
     prize = int(tournament.get("prize_coins", 0) or 0)
     return (
@@ -102,7 +116,8 @@ def _parse_create_args(args: list[str]):
 
 async def _send_or_edit_registration(context, tournament: dict, message_id: Optional[int] = None):
     chat_id = int(tournament["group_id"])
-    text = _registration_text(tournament)
+    count = await db.count_tournament_players(tournament["id"])
+    text = _registration_text(tournament, count)
     markup = _active_keyboard(tournament["id"])
     try:
         if message_id:
@@ -331,7 +346,9 @@ async def cmd_tournament_message(update: Update, context: ContextTypes.DEFAULT_T
             "Reply to the announcement you want to use and send:\n"
             "/tournament_message\n\n"
             "Or use /tournament_message followed by your text.\n"
-            "Use /tournament_message clear to restore the default card."
+            "Use /tournament_message clear to restore the default card.\n\n"
+            "Placeholders: {players}, {max_players}, {remaining}, "
+            "{entry_fee}, {prize}, {title}"
         )
         return
 

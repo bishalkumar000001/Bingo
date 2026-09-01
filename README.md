@@ -194,6 +194,11 @@ The bot includes a persistent single-elimination tournament flow in MongoDB:
 5. Match winners advance automatically. The final winner receives the configured
    coin prize exactly once and the group receives the completed bracket result.
 
+For a custom registration announcement, reply to the message with
+`/tournament_message`. You can place live values in that message using
+`{players}`, `{max_players}`, `{remaining}`, `{entry_fee}`, `{prize}`, and
+`{title}`. For example: `👥 Players: {players}/{max_players}`.
+
 To protect Telegram and MongoDB from a sudden burst of rooms, tournament matches
 run in a rolling queue. By default, up to 8 matches are active at once; when one
 finishes, the next pending match starts automatically. Set
