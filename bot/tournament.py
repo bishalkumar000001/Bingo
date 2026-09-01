@@ -143,7 +143,7 @@ async def cmd_tournament(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if active:
         await update.message.reply_text(
-            "❌ An active tournament already exists. Use /tournament_cancel first."
+            "❌ An active tournament already exists. Use /cancel_tournament first."
         )
         return
     if update.effective_chat.type == "private":

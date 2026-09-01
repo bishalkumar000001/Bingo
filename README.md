@@ -23,7 +23,7 @@ A turn-based multiplayer Bingo Telegram bot where players call numbers alternate
 | `/tournament_start` | Lock registration and launch the bracket (owner only) |
 | `/tournament_status` | Show registration or bracket status |
 | `/playerlist` | Show registered players (owner only) |
-| `/tournament_cancel` | Cancel and refund entry fees (owner only) |
+| `/cancel_tournament` | Cancel and refund entry fees (owner only) |
 
 ## Tech Stack
 
