@@ -379,24 +379,36 @@ async def get_player_active_room(player_id: int) -> Optional[Dict]:
 
 
 async def transfer_coins(from_id: int, to_id: int, amount: int) -> bool:
-    """Transfer coins from one user to another. Returns True if successful."""
-    sender = await get_user(from_id)
+    """Atomically transfer wallet coins from one member to another.
+
+    Normal members must have enough wallet coins; the caller is responsible
+    for the owner bypass, which uses add_coins() instead.
+    """
+    if amount <= 0 or from_id == to_id:
+        return False
     receiver = await get_user(to_id)
-    
-    if not sender or not receiver:
+    if not receiver:
         return False
-    
-    if sender["coins"] < amount:
-        return False
-    
-    await _col("users").update_one(
-        {"telegram_id": from_id},
+
+    # One conditional update prevents a member from spending the same coins
+    # twice when two /give requests arrive at nearly the same time.
+    result = await _col("users").update_one(
+        {"telegram_id": from_id, "coins": {"$gte": amount}},
         {"$inc": {"coins": -amount}},
     )
-    await _col("users").update_one(
+    if result.modified_count != 1:
+        return False
+
+    receiver_result = await _col("users").update_one(
         {"telegram_id": to_id},
         {"$inc": {"coins": amount}},
     )
+    if receiver_result.modified_count != 1:
+        # Roll back if the receiver disappeared unexpectedly.
+        await _col("users").update_one(
+            {"telegram_id": from_id}, {"$inc": {"coins": amount}}
+        )
+        return False
     return True
 
 async def add_coins(user_id: int, amount: int) -> bool:

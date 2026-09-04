@@ -663,6 +663,8 @@ async def cmd_give(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Amount must be greater than 0!")
         return
     
+    # OWNER_ID is a minting authority: owner /give never deducts the
+    # owner's wallet. Normal members can only give from their own balance.
     if user.id != OWNER_ID and sender["coins"] < amount:
         await update.message.reply_text(
             f"❌ You don't have enough coins!\n"
@@ -715,12 +717,21 @@ async def cmd_give(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     recipient_name = display_name_from_db(recipient)
     
-    await update.message.reply_text(
-        f"✅ Transfer successful!\n\n"
-        f"Sent: 💰 <b>{amount:,}</b> coins\n"
-        f"To: <b>{recipient_name}</b>",
-        parse_mode="HTML",
-    )
+    if user.id == OWNER_ID:
+        result_text = (
+            f"👑 <b>Owner Gift Successful!</b>\n\n"
+            f"Created: 💰 <b>{amount:,}</b> coins\n"
+            f"To: <b>{recipient_name}</b>\n\n"
+            f"💎 Your owner balance was <b>not deducted</b>."
+        )
+    else:
+        result_text = (
+            f"✅ <b>Transfer successful!</b>\n\n"
+            f"Sent: 💰 <b>{amount:,}</b> coins\n"
+            f"To: <b>{recipient_name}</b>\n"
+            f"💰 Your wallet was deducted by <b>{amount:,}</b>."
+        )
+    await update.message.reply_text(result_text, parse_mode="HTML")
     
     try:
         sender_name = display_name_from_db(sender)
