@@ -1,6 +1,8 @@
 import os
 import asyncio
 import logging
+import random
+import re
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -120,6 +122,11 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /bingo = to start the match.
 /leaderboard = rankings of the top ten users
 /profile = for your stats
+/balance = wallet + bank balance
+/deposit = put coins in bank
+/withdraw = take coins from bank
+/bet or bbet = bet Bingo Coins
+/steal or ssteal = try to steal coins
 /tournament_status = view the current tournament
 
 👑 𝗣𝗹𝗮𝘆 • 𝗪𝗶𝗻 • 𝗕𝗲𝗰𝗼𝗺𝗲 𝘁𝗵𝗲 𝗕𝗶𝗻𝗴𝗼 𝗖𝗵𝗮𝗺𝗽𝗶𝗼𝗻! 🏆"""
@@ -158,13 +165,17 @@ async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     win_rate = (wins / games * 100) if games > 0 else 0.0
     streak = player["current_streak"]
     longest = player["longest_streak"]
-    coins = player["coins"]
+    coins = int(player.get("coins", 0) or 0)
+    bank = int(player.get("bank", 0) or 0)
+    total_coins = coins + bank
 
     await update.message.reply_text(
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"👤 <b>Profile — {name}</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"💰 Coins: <b>{coins:,}</b>\n"
+        f"👛 Wallet: <b>{coins:,}</b>\n"
+        f"🏦 Bank: <b>{bank:,}</b>\n"
+        f"💎 Total Wealth: <b>{total_coins:,}</b>\n"
         f"🎮 Games Played: <b>{games}</b>\n"
         f"🏆 Wins: <b>{wins}</b>\n"
         f"😔 Losses: <b>{losses}</b>\n"
@@ -436,6 +447,189 @@ async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     except BadRequest:
         pass
+
+
+async def _ensure_user(update: Update):
+    user = update.effective_user
+    player = await db.get_user(user.id)
+    if not player:
+        await db.create_user(user.id, user.username, user.first_name)
+        player = await db.get_user(user.id)
+    return player
+
+
+def _parse_amount_arg(raw: str):
+    raw = raw.strip().lower().replace(",", "")
+    if raw == "all":
+        return "all"
+    try:
+        value = int(raw)
+        return value
+    except ValueError:
+        return None
+
+
+async def cmd_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = await _ensure_user(update)
+    wallet = int(user.get("coins", 0) or 0)
+    bank = int(user.get("bank", 0) or 0)
+    total = wallet + bank
+    await update.message.reply_text(
+        f"💰 <b>Bingo Coins</b>\n\n"
+        f"👛 Wallet: <b>{wallet:,}</b>\n"
+        f"🏦 Bank: <b>{bank:,}</b>\n"
+        f"💎 Total Wealth: <b>{total:,}</b>", parse_mode="HTML"
+    )
+
+
+async def cmd_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = await _ensure_user(update)
+    if not context.args:
+        await update.message.reply_text("Usage: /deposit <amount>\nExample: /deposit 50000\nOr: /deposit all")
+        return
+    amount = context.args[0]
+    wallet = int(user.get("coins", 0) or 0)
+    if amount.lower() == "all":
+        amount = wallet
+    else:
+        amount = _parse_amount_arg(amount)
+    if not isinstance(amount, int) or amount <= 0:
+        await update.message.reply_text("❌ Enter a valid amount.")
+        return
+    if not await db.deposit_coins(update.effective_user.id, amount):
+        await update.message.reply_text(f"❌ You don't have enough wallet coins.\n👛 Wallet: {wallet:,}")
+        return
+    await update.message.reply_text(f"🏦 <b>Deposit Successful</b>\n\n💰 Deposited: <b>{amount:,}</b>\n🏦 Your coins are now safely in the bank.", parse_mode="HTML")
+
+
+async def cmd_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = await _ensure_user(update)
+    if not context.args:
+        await update.message.reply_text("Usage: /withdraw <amount>\nExample: /withdraw 50000\nOr: /withdraw all")
+        return
+    amount = context.args[0]
+    bank = int(user.get("bank", 0) or 0)
+    if amount.lower() == "all":
+        amount = bank
+    else:
+        amount = _parse_amount_arg(amount)
+    if not isinstance(amount, int) or amount <= 0:
+        await update.message.reply_text("❌ Enter a valid amount.")
+        return
+    if not await db.withdraw_coins(update.effective_user.id, amount):
+        await update.message.reply_text(f"❌ You don't have enough bank coins.\n🏦 Bank: {bank:,}")
+        return
+    await update.message.reply_text(f"💸 <b>Withdrawal Successful</b>\n\n💰 Withdrawn: <b>{amount:,}</b>\n👛 Coins added to your wallet.", parse_mode="HTML")
+
+
+async def cmd_bet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = await _ensure_user(update)
+    args = list(context.args)
+    # MessageHandler does not populate context.args for plain-text aliases.
+    if not args and update.message and update.message.text:
+        parts = update.message.text.strip().split()
+        if parts and parts[0].lower() == "bbet":
+            args = parts[1:]
+    if not args:
+        await update.message.reply_text(
+            "🎰 <b>Bingo Coin Bet</b>\n\n"
+            "Use <code>/bet 100000</code> or <code>bbet 100000</code>.\n"
+            "Use <code>/bet all</code> or <code>bbet all</code> to bet your whole wallet.\n\n"
+            "🏦 Banked coins are protected and cannot be bet directly.\n"
+            "🎲 Win = your stake + the same amount as profit.\n"
+            "💥 Loss = your stake is lost.", parse_mode="HTML")
+        return
+    raw = args[0]
+    wallet = int(user.get("coins", 0) or 0)
+    amount = wallet if raw.lower() == "all" else _parse_amount_arg(raw)
+    if not isinstance(amount, int) or amount <= 0:
+        await update.message.reply_text("❌ Bet amount must be a positive number or <code>all</code>.", parse_mode="HTML")
+        return
+    if amount > wallet:
+        await update.message.reply_text(f"❌ Not enough Bingo Coins.\n👛 Wallet: <b>{wallet:,}</b>", parse_mode="HTML")
+        return
+    if not await db.place_bet(update.effective_user.id, amount):
+        await update.message.reply_text("❌ Bet could not be placed. Try again.")
+        return
+    win = random.choice((True, False))
+    if win:
+        # Stake was already removed; return stake + equal profit.
+        await db.resolve_bet(update.effective_user.id, amount * 2)
+        await update.message.reply_text(
+            f"🎉 <b>BET WON!</b>\n\n🎲 Bet: <b>{amount:,}</b>\n💰 Profit: <b>+{amount:,}</b>\n💎 Total returned: <b>{amount * 2:,}</b>\n\n👛 Balance: <b>{(wallet + amount):,}</b>",
+            parse_mode="HTML")
+    else:
+        remaining = wallet - amount
+        await update.message.reply_text(
+            f"💥 <b>BET LOST!</b>\n\n🎲 Bet: <b>{amount:,}</b>\n💸 Lost: <b>{amount:,}</b>\n\n👛 Balance: <b>{remaining:,}</b>",
+            parse_mode="HTML")
+
+
+async def _resolve_target(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.message
+    if msg.reply_to_message and msg.reply_to_message.from_user:
+        target_tg = msg.reply_to_message.from_user
+        target = await db.get_user(target_tg.id)
+        if target:
+            return target
+        await db.create_user(target_tg.id, target_tg.username, target_tg.first_name)
+        return await db.get_user(target_tg.id)
+    if context.args:
+        raw = context.args[0].strip()
+        if raw.startswith("@"):
+            return await db.find_user_by_username(raw[1:])
+        if raw.isdigit():
+            return await db.get_user(int(raw))
+    return None
+
+
+async def cmd_steal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    thief = await _ensure_user(update)
+    if not context.args and update.message and update.message.text:
+        parts = update.message.text.strip().split()
+        if parts and parts[0].lower() in ("ssteal",):
+            context.args = parts[1:]
+    target = await _resolve_target(update, context)
+    if not target:
+        await update.message.reply_text("🕵️ Usage: /steal @username or reply to a user's message with /steal\n\nThe target must have used the bot at least once.")
+        return
+    thief_id = update.effective_user.id
+    target_id = target["telegram_id"]
+    if thief_id == target_id:
+        await update.message.reply_text("❌ You can't steal from yourself!")
+        return
+    allowed, used = await db.consume_steal_attempt(thief_id)
+    if not allowed:
+        await update.message.reply_text("🚫 <b>Daily steal limit reached!</b>\nYou can use steal only <b>10 times per day</b>.", parse_mode="HTML")
+        return
+    target_coins = int(target.get("coins", 0) or 0)
+    if target_coins < 1000:
+        await update.message.reply_text(f"🛡️ Steal failed! The target doesn't have enough wallet coins to steal.\n\n🎯 Target wallet: <b>{target_coins:,}</b>\n📊 Attempts used: <b>{used}/10</b>", parse_mode="HTML")
+        return
+    # Random amount is chosen by the bot from the target's wallet balance.
+    # Roughly 25%-50%, capped at 100,000; small balances stay proportional.
+    upper = min(100000, max(1000, target_coins // 2))
+    lower = min(upper, max(1000, target_coins // 4))
+    amount = random.randint(lower, upper)
+    received = amount * 90 // 100
+    if received <= 0:
+        await update.message.reply_text("🛡️ Steal failed! The amount was too small.")
+        return
+    success = await db.perform_steal(thief_id, target_id, amount, received)
+    target_name = display_name_from_db(target)
+    if not success:
+        await update.message.reply_text("🛡️ <b>Steal failed!</b> The target's balance changed before the steal completed.", parse_mode="HTML")
+        return
+    thief_name = display_name_from_db(thief)
+    await update.message.reply_text(
+        f"🕵️ <b>STEAL SUCCESSFUL!</b>\n\n"
+        f"👤 Thief: <b>{thief_name}</b>\n"
+        f"🎯 Target: <b>{target_name}</b>\n"
+        f"💰 Stolen: <b>{amount:,}</b>\n"
+        f"💸 10% deduction: <b>{amount - received:,}</b>\n"
+        f"💎 You received: <b>{received:,}</b>\n\n"
+        f"📊 Steal attempts: <b>{used}/10</b> today",
+        parse_mode="HTML")
 
 
 async def cmd_give(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -722,6 +916,16 @@ def main():
     app.add_handler(CommandHandler("playerlist", cmd_playerlist))
     app.add_handler(CommandHandler("cancel_tournament", cmd_cancel_tournament))
     app.add_handler(CommandHandler("give", cmd_give))
+    app.add_handler(CommandHandler("balance", cmd_balance))
+    app.add_handler(CommandHandler("bank", cmd_balance))
+    app.add_handler(CommandHandler("deposit", cmd_deposit))
+    app.add_handler(CommandHandler("deposite", cmd_deposit))
+    app.add_handler(CommandHandler("withdraw", cmd_withdraw))
+    app.add_handler(CommandHandler("bet", cmd_bet))
+    app.add_handler(CommandHandler("steal", cmd_steal))
+    app.add_handler(CommandHandler("ssteal", cmd_steal))
+    app.add_handler(MessageHandler(filters.Regex(r"(?i)^bbet(?:\s+.*)?$"), cmd_bet))
+    app.add_handler(MessageHandler(filters.Regex(r"(?i)^ssteal(?:\s+.*)?$"), cmd_steal))
     app.add_handler(ChatMemberHandler(handle_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_error_handler(handle_error)

@@ -76,6 +76,7 @@ async def create_user(telegram_id: int, username: str, first_name: str):
             "first_name": first_name or "",
         }, "$setOnInsert": {
             "coins": 0,
+            "bank": 0,
             "games_played": 0,
             "wins": 0,
             "losses": 0,
@@ -259,10 +260,19 @@ def _time_filter_start(time_filter: str) -> Optional[datetime]:
 
 
 async def get_leaderboard(limit: int = 10) -> List[Dict]:
+    # Leaderboard uses total Bingo wealth (wallet + bank), so economy actions
+    # such as betting, stealing, depositing and withdrawing are reflected.
     pipeline = [
         {"$match": {"games_played": {"$gt": 0}}},
-        {"$sort": {"coins": -1, "wins": -1}},
+        {"$addFields": {"total_coins": {"$add": [
+            {"$ifNull": ["$coins", 0]}, {"$ifNull": ["$bank", 0]}
+        ]}}},
+        {"$sort": {"total_coins": -1, "wins": -1}},
         {"$limit": limit},
+        {"$project": {"telegram_id": 1, "username": 1, "first_name": 1,
+                       "games_played": 1, "wins": 1, "losses": 1,
+                       "current_streak": 1, "longest_streak": 1,
+                       "bank": 1, "coins": "$total_coins"}},
     ]
     cursor = _col("users").aggregate(pipeline)
     docs = await cursor.to_list(length=limit)
@@ -396,6 +406,103 @@ async def add_coins(user_id: int, amount: int) -> bool:
         {"$inc": {"coins": amount}}
     )
     return result.modified_count > 0
+
+async def get_total_coins(user_id: int) -> int:
+    user = await get_user(user_id)
+    if not user:
+        return 0
+    return int(user.get("coins", 0) or 0) + int(user.get("bank", 0) or 0)
+
+
+async def deposit_coins(user_id: int, amount: int) -> bool:
+    """Move coins from wallet to bank atomically."""
+    if amount <= 0:
+        return False
+    result = await _col("users").update_one(
+        {"telegram_id": user_id, "coins": {"$gte": amount}},
+        {"$inc": {"coins": -amount, "bank": amount}},
+    )
+    return result.modified_count > 0
+
+
+async def withdraw_coins(user_id: int, amount: int) -> bool:
+    """Move coins from bank to wallet atomically."""
+    if amount <= 0:
+        return False
+    result = await _col("users").update_one(
+        {"telegram_id": user_id, "bank": {"$gte": amount}},
+        {"$inc": {"bank": -amount, "coins": amount}},
+    )
+    return result.modified_count > 0
+
+
+async def place_bet(user_id: int, amount: int) -> bool:
+    """Atomically reserve a bet from the wallet."""
+    if amount <= 0:
+        return False
+    result = await _col("users").update_one(
+        {"telegram_id": user_id, "coins": {"$gte": amount}},
+        {"$inc": {"coins": -amount}},
+    )
+    return result.modified_count > 0
+
+
+async def resolve_bet(user_id: int, payout: int) -> bool:
+    """Credit a resolved bet payout to the wallet."""
+    if payout <= 0:
+        return False
+    result = await _col("users").update_one(
+        {"telegram_id": user_id}, {"$inc": {"coins": payout}}
+    )
+    return result.modified_count > 0
+
+
+async def consume_steal_attempt(user_id: int) -> tuple[bool, int]:
+    """Atomically consume one of the user's 10 daily steal attempts."""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    result = await _col("users").update_one(
+        {"telegram_id": user_id, "steal_day": today, "steal_count": {"$lt": 10}},
+        {"$inc": {"steal_count": 1}},
+    )
+    if result.modified_count == 1:
+        user = await get_user(user_id)
+        return True, int(user.get("steal_count", 1) if user else 1)
+
+    # New day (or first use): reset the counter atomically.
+    result = await _col("users").update_one(
+        {"telegram_id": user_id, "$or": [
+            {"steal_day": {"$ne": today}}, {"steal_day": {"$exists": False}}
+        ]},
+        {"$set": {"steal_day": today, "steal_count": 1}},
+    )
+    if result.modified_count == 1:
+        return True, 1
+    user = await get_user(user_id)
+    return False, int(user.get("steal_count", 10) if user else 10)
+
+
+async def perform_steal(thief_id: int, target_id: int, amount: int, received: int) -> bool:
+    """Atomically steal amount from target and credit received to thief."""
+    if amount <= 0 or received <= 0 or thief_id == target_id:
+        return False
+    target_result = await _col("users").update_one(
+        {"telegram_id": target_id, "coins": {"$gte": amount}},
+        {"$inc": {"coins": -amount}},
+    )
+    if target_result.modified_count != 1:
+        return False
+    thief_result = await _col("users").update_one(
+        {"telegram_id": thief_id}, {"$inc": {"coins": received}}
+    )
+    if thief_result.modified_count != 1:
+        await _col("users").update_one({"telegram_id": target_id}, {"$inc": {"coins": amount}})
+        return False
+    await _col("steal_logs").insert_one({
+        "thief_id": thief_id, "target_id": target_id, "amount": amount,
+        "received": received, "created_at": datetime.now(timezone.utc),
+    })
+    return True
+
 
 async def find_user_by_username(username: str) -> Optional[Dict]:
     """Find a user by username."""
