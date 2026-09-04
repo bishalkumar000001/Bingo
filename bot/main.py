@@ -3,6 +3,8 @@ import asyncio
 import logging
 import random
 import re
+from html import escape
+from datetime import timezone
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -45,7 +47,15 @@ from tournament import (
     handle_tournament_forfeit,
 )
 from utils import display_name_from_db, display_name
-from models import LINES_TO_WIN, WIN_COINS, FORFEIT_COST, CANCEL_FREE_THRESHOLD, OWNER_ID, LOGGER_GROUP_ID, SUPPORT_CHANNEL
+from models import (
+    LINES_TO_WIN,
+    WIN_COINS,
+    FORFEIT_COST,
+    CANCEL_FREE_THRESHOLD,
+    OWNER_IDS,
+    LOGGER_GROUP_ID,
+    SUPPORT_CHANNEL,
+)
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -79,6 +89,13 @@ Complete 5 full lines to make BINGO:
 ✖️ Diagonals — Across the card
 
 🎉 The first player to complete 5 lines wins the match! 👑🏆
+
+💎 𝗖𝗼𝗶𝗻 𝗩𝗮𝘂𝗹𝘁
+Use /balance or /wallet for the interactive wallet.
+Use /deposit and /withdraw to protect your coins.
+Use /daily for a UTC daily reward with a streak bonus.
+Use /transactions or /history to review recent coin activity.
+Use /bet or bbet for a 50/50 bet, and /steal or ssteal for the daily steal mode.
 
 🥇 𝗟𝗲𝗮𝗱𝗲𝗿𝗯𝗼𝗮𝗿𝗱
 Compete with other players and fight for the #1 spot! 👑
@@ -123,6 +140,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /leaderboard = rankings of the top ten users
 /profile = for your stats
 /balance = wallet + bank balance
+/daily = claim your daily reward
+/transactions = recent coin history
 /deposit = put coins in bank
 /withdraw = take coins from bank
 /bet or bbet = bet Bingo Coins
@@ -382,7 +401,7 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
-    if not OWNER_ID or user.id != OWNER_ID:
+    if user.id not in OWNER_IDS:
         await update.message.reply_text("❌ This command is for the bot owner only.")
         return
 
@@ -458,6 +477,159 @@ async def _ensure_user(update: Update):
     return player
 
 
+def _coin_bar(value: int, total: int, width: int = 12) -> str:
+    """Render a compact wallet/bank split for Telegram's text UI."""
+    if total <= 0:
+        return "░" * width
+    filled = max(0, min(width, round((value / total) * width)))
+    return "▰" * filled + "▱" * (width - filled)
+
+
+def _economy_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    """Quick actions for the player's private coin dashboard."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🏦 Deposit 25%", callback_data=f"eco:deposit:25:{user_id}"),
+            InlineKeyboardButton("🏦 Deposit All", callback_data=f"eco:deposit:all:{user_id}"),
+        ],
+        [
+            InlineKeyboardButton("💸 Withdraw 25%", callback_data=f"eco:withdraw:25:{user_id}"),
+            InlineKeyboardButton("💸 Withdraw All", callback_data=f"eco:withdraw:all:{user_id}"),
+        ],
+        [
+            InlineKeyboardButton("🎲 Quick Bet 25%", callback_data=f"eco:bet:25:{user_id}"),
+            InlineKeyboardButton("🎲 Quick Bet 50%", callback_data=f"eco:bet:50:{user_id}"),
+        ],
+        [
+            InlineKeyboardButton("🕵️ Steal Guide", callback_data=f"eco:steal_help:0:{user_id}"),
+            InlineKeyboardButton("🔄 Refresh", callback_data=f"eco:refresh:0:{user_id}"),
+        ],
+        [
+            InlineKeyboardButton("🎁 Daily Reward", callback_data=f"eco:daily:0:{user_id}"),
+            InlineKeyboardButton("🧾 History", callback_data=f"eco:history:0:{user_id}"),
+        ],
+    ])
+
+
+def _economy_text(player: dict) -> str:
+    wallet = int(player.get("coins", 0) or 0)
+    bank = int(player.get("bank", 0) or 0)
+    total = wallet + bank
+    games = int(player.get("games_played", 0) or 0)
+    wins = int(player.get("wins", 0) or 0)
+    daily_streak = int(player.get("daily_streak", 0) or 0)
+    win_rate = (wins / games * 100) if games else 0
+    name = escape(display_name_from_db(player))
+
+    return (
+        "╭━━━━━━━━━━━━━━━━━━━━╮\n"
+        "│  💎 <b>BINGO VAULT</b>  │\n"
+        "╰━━━━━━━━━━━━━━━━━━━━╯\n\n"
+        f"👤 <b>{name}</b>\n\n"
+        f"👛 <b>Wallet</b>  <code>{wallet:,}</code>\n"
+        f"🏦 <b>Bank</b>    <code>{bank:,}</code>\n"
+        f"💰 <b>Total wealth</b>  <code>{total:,}</code>\n"
+        f"   <code>{_coin_bar(wallet, total)}</code>  ▰ wallet  ▱ bank\n\n"
+        f"🎮 {games} games  •  🏆 {wins} wins  •  📈 {win_rate:.1f}% win rate\n"
+        f"🔥 Daily streak: <b>{daily_streak}</b>\n\n"
+        "💡 Wallet coins are ready for games, bets and steals.\n"
+        "   Bank coins stay protected until you withdraw them."
+    )
+
+
+def _amount_from_share(raw: str, balance: int):
+    if raw == "all":
+        return balance
+    try:
+        share = int(raw)
+    except ValueError:
+        return None
+    if share not in (25, 50, 75):
+        return None
+    return balance * share // 100
+
+
+async def _settle_bet(user_id: int, amount: int):
+    """Reserve and resolve one bet, returning None if the reserve failed."""
+    if not await db.place_bet(user_id, amount):
+        return None
+    won = random.choice((True, False))
+    if won:
+        await db.resolve_bet(user_id, amount * 2)
+    return won
+
+
+async def _show_economy_panel(query, player: dict):
+    try:
+        await query.edit_message_text(
+            _economy_text(player),
+            parse_mode="HTML",
+            reply_markup=_economy_keyboard(player["telegram_id"]),
+        )
+    except BadRequest:
+        # Telegram returns this when Refresh is pressed without changes.
+        pass
+
+
+def _history_event_label(event: str) -> str:
+    return {
+        "daily_reward": "🎁 Daily reward",
+        "deposit": "🏦 Deposit",
+        "withdraw": "💸 Withdraw",
+        "bet_stake": "🎲 Bet stake",
+        "bet_payout": "🎉 Bet payout",
+        "game_win": "🏆 Bingo win",
+        "forfeit_fee": "🏳️ Forfeit fee",
+        "steal_received": "🕵️ Steal received",
+        "stolen_from": "🛡️ Stolen from you",
+        "transfer_sent": "🎁 Transfer sent",
+        "transfer_received": "🎁 Transfer received",
+        "coin_grant": "💎 Coin grant",
+    }.get(event, event.replace("_", " ").title())
+
+
+def _economy_history_text(player: dict, history: list[dict]) -> str:
+    lines = [
+        "╭━━━━━━━━━━━━━━━━━━━━╮",
+        "│  🧾 <b>COIN HISTORY</b>  │",
+        "╰━━━━━━━━━━━━━━━━━━━━╯",
+        "",
+        f"👤 <b>{escape(display_name_from_db(player))}</b>",
+        "",
+    ]
+    if not history:
+        lines.append("📭 No economy activity recorded yet.")
+        return "\n".join(lines)
+
+    for entry in history:
+        amount = int(entry.get("amount", 0) or 0)
+        sign = "+" if amount > 0 else ""
+        created = entry.get("created_at")
+        if created and created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        stamp = created.strftime("%d %b, %H:%M") if created else "recently"
+        lines.append(
+            f"{_history_event_label(entry.get('event', 'activity'))} "
+            f"<b>{sign}{amount:,}</b>  <i>{stamp} UTC</i>"
+        )
+    lines.extend(["", "Use /balance to return to your vault."])
+    return "\n".join(lines)
+
+
+async def _show_economy_history(query, player: dict):
+    history = await db.get_economy_history(player["telegram_id"])
+    await query.edit_message_text(
+        _economy_history_text(player, history),
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton(
+                "⬅️ Back to Vault",
+                callback_data=f"eco:refresh:0:{player['telegram_id']}",
+            )
+        ]]),
+    )
+
+
 def _parse_amount_arg(raw: str):
     raw = raw.strip().lower().replace(",", "")
     if raw == "all":
@@ -471,21 +643,189 @@ def _parse_amount_arg(raw: str):
 
 async def cmd_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = await _ensure_user(update)
-    wallet = int(user.get("coins", 0) or 0)
-    bank = int(user.get("bank", 0) or 0)
-    total = wallet + bank
     await update.message.reply_text(
-        f"💰 <b>Bingo Coins</b>\n\n"
-        f"👛 Wallet: <b>{wallet:,}</b>\n"
-        f"🏦 Bank: <b>{bank:,}</b>\n"
-        f"💎 Total Wealth: <b>{total:,}</b>", parse_mode="HTML"
+        _economy_text(user),
+        parse_mode="HTML",
+        reply_markup=_economy_keyboard(user["telegram_id"]),
     )
+
+
+async def cmd_economy(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Alias for the interactive wallet dashboard."""
+    await cmd_balance(update, context)
+
+
+async def cmd_daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = await _ensure_user(update)
+    reward = await db.claim_daily_reward(user["telegram_id"])
+    if not reward:
+        await update.message.reply_text("❌ Your wallet could not be found. Send /start first.")
+        return
+    if not reward["claimed"]:
+        await update.message.reply_text(
+            "⏳ <b>Daily reward already claimed</b>\n\n"
+            f"🔥 Current streak: <b>{reward['streak']} day(s)</b>\n"
+            "Come back after 00:00 UTC for the next reward.",
+            parse_mode="HTML",
+            reply_markup=_economy_keyboard(user["telegram_id"]),
+        )
+        return
+    fresh = await db.get_user(user["telegram_id"])
+    await update.message.reply_text(
+        "🎁 <b>DAILY REWARD CLAIMED</b>\n\n"
+        f"💰 Reward: <b>+{reward['reward']:,}</b> coins\n"
+        f"🔥 Streak: <b>{reward['streak']} day(s)</b>\n"
+        f"👛 Wallet: <b>{int(fresh.get('coins', 0)):,}</b>\n\n"
+        "Keep your streak alive to unlock bigger rewards.",
+        parse_mode="HTML",
+        reply_markup=_economy_keyboard(user["telegram_id"]),
+    )
+
+
+async def cmd_transactions(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = await _ensure_user(update)
+    history = await db.get_economy_history(user["telegram_id"])
+    await update.message.reply_text(
+        _economy_history_text(user, history),
+        parse_mode="HTML",
+        reply_markup=_economy_keyboard(user["telegram_id"]),
+    )
+
+
+async def handle_economy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    parts = (query.data or "").split(":")
+    if len(parts) != 4:
+        await query.answer("This wallet action has expired.", show_alert=True)
+        return
+
+    action, raw_amount, owner_id = parts[1], parts[2], parts[3]
+    try:
+        owner_id = int(owner_id)
+    except ValueError:
+        await query.answer("Invalid wallet action.", show_alert=True)
+        return
+    if query.from_user.id != owner_id:
+        await query.answer("This wallet panel belongs to another player.", show_alert=True)
+        return
+
+    player = await db.get_user(owner_id)
+    if not player:
+        await query.answer("Send /start first to create your wallet.", show_alert=True)
+        return
+
+    if action == "daily":
+        reward = await db.claim_daily_reward(owner_id)
+        if not reward or not reward["claimed"]:
+            streak = reward["streak"] if reward else 0
+            await query.answer("Daily reward already claimed today.", show_alert=True)
+            await query.edit_message_text(
+                _economy_text(player)
+                + f"\n\n⏳ Daily reward claimed • 🔥 {streak}-day streak",
+                parse_mode="HTML",
+                reply_markup=_economy_keyboard(owner_id),
+            )
+            return
+        fresh = await db.get_user(owner_id)
+        await query.answer(f"+{reward['reward']:,} coins claimed! 🎁")
+        await query.edit_message_text(
+            _economy_text(fresh)
+            + f"\n\n🎁 <b>Daily reward:</b> +{reward['reward']:,} coins"
+            + f"\n🔥 <b>Streak:</b> {reward['streak']} day(s)",
+            parse_mode="HTML",
+            reply_markup=_economy_keyboard(owner_id),
+        )
+        return
+
+    if action == "history":
+        await query.answer()
+        await _show_economy_history(query, player)
+        return
+
+    if action == "refresh":
+        await _show_economy_panel(query, player)
+        await query.answer("Wallet refreshed.")
+        return
+
+    if action == "steal_help":
+        await query.answer()
+        await query.edit_message_text(
+            "🕵️ <b>STEAL MODE</b>\n\n"
+            "Reply to a player's message with <code>/steal</code>, or use "
+            "<code>/steal @username</code>.\n\n"
+            "• 10 attempts per UTC day\n"
+            "• Only wallet coins can be stolen\n"
+            "• The target must have at least 1,000 wallet coins\n"
+            "• A 10% operation fee is removed from the stolen amount\n\n"
+            "Use it strategically — the bank is protected.",
+            parse_mode="HTML",
+            reply_markup=_economy_keyboard(owner_id),
+        )
+        return
+
+    if action == "bet":
+        wallet = int(player.get("coins", 0) or 0)
+        amount = _amount_from_share(raw_amount, wallet)
+        if not amount:
+            await query.answer("Your wallet is too small for that bet.", show_alert=True)
+            return
+        won = await _settle_bet(owner_id, amount)
+        if won is None:
+            await query.answer("Bet could not be placed. Refresh your wallet.", show_alert=True)
+            return
+        fresh = await db.get_user(owner_id)
+        result = (
+            f"🎉 <b>BET WON</b>\n\n🎲 Stake: <b>{amount:,}</b>\n"
+            f"💎 Profit: <b>+{amount:,}</b>\n\n"
+            f"👛 New wallet: <b>{int(fresh.get('coins', 0)):,}</b>"
+            if won else
+            f"💥 <b>BET LOST</b>\n\n🎲 Stake lost: <b>{amount:,}</b>\n\n"
+            f"👛 New wallet: <b>{int(fresh.get('coins', 0)):,}</b>"
+        )
+        await query.answer("Bet won! 🎉" if won else "Better luck next time.")
+        await query.edit_message_text(
+            result + "\n\n" + _economy_text(fresh),
+            parse_mode="HTML",
+            reply_markup=_economy_keyboard(owner_id),
+        )
+        return
+
+    if action not in ("deposit", "withdraw"):
+        await query.answer("Unknown wallet action.", show_alert=True)
+        return
+
+    balance_key = "coins" if action == "deposit" else "bank"
+    available = int(player.get(balance_key, 0) or 0)
+    amount = _amount_from_share(raw_amount, available)
+    if not amount:
+        await query.answer("There are not enough coins for that action.", show_alert=True)
+        return
+
+    success = (
+        await db.deposit_coins(owner_id, amount)
+        if action == "deposit"
+        else await db.withdraw_coins(owner_id, amount)
+    )
+    if not success:
+        await query.answer("Your balance changed. Refresh and try again.", show_alert=True)
+        return
+
+    fresh = await db.get_user(owner_id)
+    label = "Deposited into the bank" if action == "deposit" else "Moved to your wallet"
+    await query.answer(f"{label}: {amount:,} coins.")
+    await _show_economy_panel(query, fresh)
 
 
 async def cmd_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = await _ensure_user(update)
     if not context.args:
-        await update.message.reply_text("Usage: /deposit <amount>\nExample: /deposit 50000\nOr: /deposit all")
+        await update.message.reply_text(
+            "🏦 <b>Deposit to your protected bank</b>\n\n"
+            "Use <code>/deposit 50000</code> or <code>/deposit all</code>.\n"
+            "Your bank balance cannot be used for bets or steals.",
+            parse_mode="HTML",
+            reply_markup=_economy_keyboard(user["telegram_id"]),
+        )
         return
     amount = context.args[0]
     wallet = int(user.get("coins", 0) or 0)
@@ -494,18 +834,40 @@ async def cmd_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         amount = _parse_amount_arg(amount)
     if not isinstance(amount, int) or amount <= 0:
-        await update.message.reply_text("❌ Enter a valid amount.")
+        await update.message.reply_text(
+            "❌ Enter a valid positive amount, or use <code>all</code>.",
+            parse_mode="HTML",
+        )
         return
     if not await db.deposit_coins(update.effective_user.id, amount):
-        await update.message.reply_text(f"❌ You don't have enough wallet coins.\n👛 Wallet: {wallet:,}")
+        await update.message.reply_text(
+            f"❌ <b>Deposit not completed</b>\n\n"
+            f"👛 Available wallet: <b>{wallet:,}</b>\n"
+            f"💸 Requested: <b>{amount:,}</b>",
+            parse_mode="HTML",
+            reply_markup=_economy_keyboard(user["telegram_id"]),
+        )
         return
-    await update.message.reply_text(f"🏦 <b>Deposit Successful</b>\n\n💰 Deposited: <b>{amount:,}</b>\n🏦 Your coins are now safely in the bank.", parse_mode="HTML")
+    fresh = await db.get_user(update.effective_user.id)
+    await update.message.reply_text(
+        f"✅ <b>Deposit complete</b>\n\n"
+        f"🏦 Protected: <b>+{amount:,}</b>\n"
+        f"🏦 Bank balance: <b>{int(fresh.get('bank', 0)):,}</b>\n"
+        f"💎 Total wealth: <b>{int(fresh.get('bank', 0)) + int(fresh.get('coins', 0)):,}</b>",
+        parse_mode="HTML",
+        reply_markup=_economy_keyboard(user["telegram_id"]),
+    )
 
 
 async def cmd_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = await _ensure_user(update)
     if not context.args:
-        await update.message.reply_text("Usage: /withdraw <amount>\nExample: /withdraw 50000\nOr: /withdraw all")
+        await update.message.reply_text(
+            "💸 <b>Withdraw from your protected bank</b>\n\n"
+            "Use <code>/withdraw 50000</code> or <code>/withdraw all</code>.",
+            parse_mode="HTML",
+            reply_markup=_economy_keyboard(user["telegram_id"]),
+        )
         return
     amount = context.args[0]
     bank = int(user.get("bank", 0) or 0)
@@ -514,12 +876,29 @@ async def cmd_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         amount = _parse_amount_arg(amount)
     if not isinstance(amount, int) or amount <= 0:
-        await update.message.reply_text("❌ Enter a valid amount.")
+        await update.message.reply_text(
+            "❌ Enter a valid positive amount, or use <code>all</code>.",
+            parse_mode="HTML",
+        )
         return
     if not await db.withdraw_coins(update.effective_user.id, amount):
-        await update.message.reply_text(f"❌ You don't have enough bank coins.\n🏦 Bank: {bank:,}")
+        await update.message.reply_text(
+            f"❌ <b>Withdrawal not completed</b>\n\n"
+            f"🏦 Available bank: <b>{bank:,}</b>\n"
+            f"💸 Requested: <b>{amount:,}</b>",
+            parse_mode="HTML",
+            reply_markup=_economy_keyboard(user["telegram_id"]),
+        )
         return
-    await update.message.reply_text(f"💸 <b>Withdrawal Successful</b>\n\n💰 Withdrawn: <b>{amount:,}</b>\n👛 Coins added to your wallet.", parse_mode="HTML")
+    fresh = await db.get_user(update.effective_user.id)
+    await update.message.reply_text(
+        f"✅ <b>Withdrawal complete</b>\n\n"
+        f"👛 Wallet received: <b>+{amount:,}</b>\n"
+        f"👛 Wallet balance: <b>{int(fresh.get('coins', 0)):,}</b>\n"
+        f"💎 Total wealth: <b>{int(fresh.get('bank', 0)) + int(fresh.get('coins', 0)):,}</b>",
+        parse_mode="HTML",
+        reply_markup=_economy_keyboard(user["telegram_id"]),
+    )
 
 
 async def cmd_bet(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -528,44 +907,69 @@ async def cmd_bet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # MessageHandler does not populate context.args for plain-text aliases.
     if not args and update.message and update.message.text:
         parts = update.message.text.strip().split()
-        if parts and parts[0].lower() == "bbet":
+        if parts and parts[0].lower() in ("bbet", "bet"):
             args = parts[1:]
     if not args:
         await update.message.reply_text(
-            "🎰 <b>Bingo Coin Bet</b>\n\n"
-            "Use <code>/bet 100000</code> or <code>bbet 100000</code>.\n"
-            "Use <code>/bet all</code> or <code>bbet all</code> to bet your whole wallet.\n\n"
+            "🎰 <b>BINGO BETS</b>\n\n"
+            "Use <code>/bet 100000</code>, <code>bbet 100000</code> or <code>bbet all</code>.\n\n"
             "🏦 Banked coins are protected and cannot be bet directly.\n"
-            "🎲 Win = your stake + the same amount as profit.\n"
-            "💥 Loss = your stake is lost.", parse_mode="HTML")
+            "🎲 Win = your stake returned + equal profit.\n"
+            "💥 Loss = your stake is lost.\n\n"
+            f"👛 Current wallet: <b>{int(user.get('coins', 0) or 0):,}</b>",
+            parse_mode="HTML",
+            reply_markup=_economy_keyboard(user["telegram_id"]),
+        )
         return
     raw = args[0]
     wallet = int(user.get("coins", 0) or 0)
     amount = wallet if raw.lower() == "all" else _parse_amount_arg(raw)
     if not isinstance(amount, int) or amount <= 0:
-        await update.message.reply_text("❌ Bet amount must be a positive number or <code>all</code>.", parse_mode="HTML")
+        await update.message.reply_text(
+            "❌ Bet amount must be a positive number or <code>all</code>.",
+            parse_mode="HTML",
+        )
         return
     if amount > wallet:
-        await update.message.reply_text(f"❌ Not enough Bingo Coins.\n👛 Wallet: <b>{wallet:,}</b>", parse_mode="HTML")
-        return
-    if not await db.place_bet(update.effective_user.id, amount):
-        await update.message.reply_text("❌ Bet could not be placed. Try again.")
-        return
-    win = random.choice((True, False))
-    if win:
-        # Stake was already removed; return stake + equal profit.
-        await db.resolve_bet(update.effective_user.id, amount * 2)
         await update.message.reply_text(
-            f"🎉 <b>BET WON!</b>\n\n🎲 Bet: <b>{amount:,}</b>\n💰 Profit: <b>+{amount:,}</b>\n💎 Total returned: <b>{amount * 2:,}</b>\n\n👛 Balance: <b>{(wallet + amount):,}</b>",
-            parse_mode="HTML")
+            f"❌ <b>Not enough wallet coins</b>\n\n"
+            f"👛 Wallet: <b>{wallet:,}</b>\n"
+            f"🎲 Requested bet: <b>{amount:,}</b>\n\n"
+            "Tip: use /deposit to protect coins in your bank.",
+            parse_mode="HTML",
+            reply_markup=_economy_keyboard(user["telegram_id"]),
+        )
+        return
+    won = await _settle_bet(update.effective_user.id, amount)
+    if won is None:
+        await update.message.reply_text(
+            "❌ Bet could not be placed. Your balance may have changed — try again.",
+            reply_markup=_economy_keyboard(user["telegram_id"]),
+        )
+        return
+    fresh = await db.get_user(update.effective_user.id)
+    new_wallet = int(fresh.get("coins", 0) or 0)
+    if won:
+        await update.message.reply_text(
+            f"🎉 <b>BET WON</b>\n\n"
+            f"🎲 Stake: <b>{amount:,}</b>\n"
+            f"💎 Profit: <b>+{amount:,}</b>\n"
+            f"💰 Returned: <b>{amount * 2:,}</b>\n\n"
+            f"👛 New wallet: <b>{new_wallet:,}</b>",
+            parse_mode="HTML",
+            reply_markup=_economy_keyboard(user["telegram_id"]),
+        )
     else:
-        remaining = wallet - amount
         await update.message.reply_text(
-            f"💥 <b>BET LOST!</b>\n\n🎲 Bet: <b>{amount:,}</b>\n💸 Lost: <b>{amount:,}</b>\n\n👛 Balance: <b>{remaining:,}</b>",
-            parse_mode="HTML")
+            f"💥 <b>BET LOST</b>\n\n"
+            f"🎲 Stake lost: <b>{amount:,}</b>\n\n"
+            f"👛 New wallet: <b>{new_wallet:,}</b>",
+            parse_mode="HTML",
+            reply_markup=_economy_keyboard(user["telegram_id"]),
+        )
 
 
-async def _resolve_target(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def _resolve_target(update: Update, context: ContextTypes.DEFAULT_TYPE, args=None):
     msg = update.message
     if msg.reply_to_message and msg.reply_to_message.from_user:
         target_tg = msg.reply_to_message.from_user
@@ -574,8 +978,9 @@ async def _resolve_target(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return target
         await db.create_user(target_tg.id, target_tg.username, target_tg.first_name)
         return await db.get_user(target_tg.id)
-    if context.args:
-        raw = context.args[0].strip()
+    args = context.args if args is None else args
+    if args:
+        raw = args[0].strip()
         if raw.startswith("@"):
             return await db.find_user_by_username(raw[1:])
         if raw.isdigit():
@@ -585,26 +990,50 @@ async def _resolve_target(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_steal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     thief = await _ensure_user(update)
-    if not context.args and update.message and update.message.text:
+    args = list(context.args)
+    if not args and update.message and update.message.text:
         parts = update.message.text.strip().split()
-        if parts and parts[0].lower() in ("ssteal",):
-            context.args = parts[1:]
-    target = await _resolve_target(update, context)
+        if parts and parts[0].lower() in ("ssteal", "steal"):
+            args = parts[1:]
+    target = await _resolve_target(update, context, args)
     if not target:
-        await update.message.reply_text("🕵️ Usage: /steal @username or reply to a user's message with /steal\n\nThe target must have used the bot at least once.")
+        await update.message.reply_text(
+            "🕵️ <b>STEAL MODE</b>\n\n"
+            "Reply to a player's message with <code>/steal</code>, or use "
+            "<code>/steal @username</code>.\n\n"
+            "The target must have used the bot at least once.",
+            parse_mode="HTML",
+            reply_markup=_economy_keyboard(thief["telegram_id"]),
+        )
         return
     thief_id = update.effective_user.id
     target_id = target["telegram_id"]
     if thief_id == target_id:
-        await update.message.reply_text("❌ You can't steal from yourself!")
+        await update.message.reply_text(
+            "❌ You can't steal from yourself!",
+            reply_markup=_economy_keyboard(thief["telegram_id"]),
+        )
         return
     allowed, used = await db.consume_steal_attempt(thief_id)
     if not allowed:
-        await update.message.reply_text("🚫 <b>Daily steal limit reached!</b>\nYou can use steal only <b>10 times per day</b>.", parse_mode="HTML")
+        await update.message.reply_text(
+            "🚫 <b>Daily steal limit reached</b>\n\n"
+            "You have used all <b>10/10</b> attempts for today.\n"
+            "Your limit resets at 00:00 UTC.",
+            parse_mode="HTML",
+            reply_markup=_economy_keyboard(thief["telegram_id"]),
+        )
         return
     target_coins = int(target.get("coins", 0) or 0)
     if target_coins < 1000:
-        await update.message.reply_text(f"🛡️ Steal failed! The target doesn't have enough wallet coins to steal.\n\n🎯 Target wallet: <b>{target_coins:,}</b>\n📊 Attempts used: <b>{used}/10</b>", parse_mode="HTML")
+        await update.message.reply_text(
+            f"🛡️ <b>Steal failed</b>\n\n"
+            "The target needs at least <b>1,000</b> wallet coins.\n\n"
+            f"🎯 Target wallet: <b>{target_coins:,}</b>\n"
+            f"📊 Attempts used: <b>{used}/10</b> today",
+            parse_mode="HTML",
+            reply_markup=_economy_keyboard(thief["telegram_id"]),
+        )
         return
     # Random amount is chosen by the bot from the target's wallet balance.
     # Roughly 25%-50%, capped at 100,000; small balances stay proportional.
@@ -613,12 +1042,21 @@ async def cmd_steal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     amount = random.randint(lower, upper)
     received = amount * 90 // 100
     if received <= 0:
-        await update.message.reply_text("🛡️ Steal failed! The amount was too small.")
+        await update.message.reply_text(
+            "🛡️ Steal failed — the amount was too small.",
+            reply_markup=_economy_keyboard(thief["telegram_id"]),
+        )
         return
     success = await db.perform_steal(thief_id, target_id, amount, received)
     target_name = display_name_from_db(target)
     if not success:
-        await update.message.reply_text("🛡️ <b>Steal failed!</b> The target's balance changed before the steal completed.", parse_mode="HTML")
+        await update.message.reply_text(
+            "🛡️ <b>Steal failed</b>\n\n"
+            "The target's balance changed before the action completed. "
+            "Your attempt was still counted.",
+            parse_mode="HTML",
+            reply_markup=_economy_keyboard(thief["telegram_id"]),
+        )
         return
     thief_name = display_name_from_db(thief)
     await update.message.reply_text(
@@ -629,7 +1067,9 @@ async def cmd_steal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"💸 10% deduction: <b>{amount - received:,}</b>\n"
         f"💎 You received: <b>{received:,}</b>\n\n"
         f"📊 Steal attempts: <b>{used}/10</b> today",
-        parse_mode="HTML")
+        parse_mode="HTML",
+        reply_markup=_economy_keyboard(thief["telegram_id"]),
+    )
 
 
 async def cmd_give(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -663,9 +1103,10 @@ async def cmd_give(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Amount must be greater than 0!")
         return
     
-    # OWNER_ID is a minting authority: owner /give never deducts the
+    # Owners are minting authorities: owner /give never deducts the
     # owner's wallet. Normal members can only give from their own balance.
-    if user.id != OWNER_ID and sender["coins"] < amount:
+    is_owner = user.id in OWNER_IDS
+    if not is_owner and sender["coins"] < amount:
         await update.message.reply_text(
             f"❌ You don't have enough coins!\n"
             f"You have: 💰 <b>{sender['coins']:,}</b>\n"
@@ -699,7 +1140,7 @@ async def cmd_give(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     # Transfer coins
-    if user.id == OWNER_ID:
+    if is_owner:
         success = await db.add_coins(
             recipient["telegram_id"],
             amount
@@ -717,7 +1158,7 @@ async def cmd_give(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     recipient_name = display_name_from_db(recipient)
     
-    if user.id == OWNER_ID:
+    if is_owner:
         result_text = (
             f"👑 <b>Owner Gift Successful!</b>\n\n"
             f"Created: 💰 <b>{amount:,}</b> coins\n"
@@ -843,6 +1284,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "add_me":
         await query.answer("Add this bot to your group, then use /bingo to start a match.", show_alert=True)
         return
+    if data.startswith("eco:"):
+        await handle_economy_callback(update, context)
+        return
 
     if data.startswith("join:"):
         await handle_join_callback(update, context)
@@ -929,14 +1373,19 @@ def main():
     app.add_handler(CommandHandler("give", cmd_give))
     app.add_handler(CommandHandler("balance", cmd_balance))
     app.add_handler(CommandHandler("bank", cmd_balance))
+    app.add_handler(CommandHandler("economy", cmd_economy))
+    app.add_handler(CommandHandler("wallet", cmd_economy))
+    app.add_handler(CommandHandler("daily", cmd_daily))
+    app.add_handler(CommandHandler("transactions", cmd_transactions))
+    app.add_handler(CommandHandler("history", cmd_transactions))
     app.add_handler(CommandHandler("deposit", cmd_deposit))
     app.add_handler(CommandHandler("deposite", cmd_deposit))
     app.add_handler(CommandHandler("withdraw", cmd_withdraw))
     app.add_handler(CommandHandler("bet", cmd_bet))
     app.add_handler(CommandHandler("steal", cmd_steal))
     app.add_handler(CommandHandler("ssteal", cmd_steal))
-    app.add_handler(MessageHandler(filters.Regex(r"(?i)^bbet(?:\s+.*)?$"), cmd_bet))
-    app.add_handler(MessageHandler(filters.Regex(r"(?i)^ssteal(?:\s+.*)?$"), cmd_steal))
+    app.add_handler(MessageHandler(filters.Regex(r"(?i)^(?:bbet|bet)(?:\s+.*)?$"), cmd_bet))
+    app.add_handler(MessageHandler(filters.Regex(r"(?i)^(?:ssteal|steal)(?:\s+.*)?$"), cmd_steal))
     app.add_handler(ChatMemberHandler(handle_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_error_handler(handle_error)

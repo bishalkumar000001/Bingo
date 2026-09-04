@@ -4,6 +4,7 @@ from datetime import datetime, timezone, timedelta
 
 import motor.motor_asyncio
 from bson import ObjectId
+from pymongo import ReturnDocument
 
 MONGODB_URI = os.environ.get("MONGODB_URI", "mongodb://localhost:27017")
 DB_NAME = "velocity_bingo"
@@ -60,6 +61,8 @@ async def init_db():
     )
     await db["tournament_matches"].create_index([("room_id", 1)])
     await db["chats"].create_index("chat_id", unique=True)
+    await db["economy_logs"].create_index([("telegram_id", 1), ("created_at", -1)])
+    await db["economy_logs"].create_index([("created_at", -1)])
 
 
 async def get_user(telegram_id: int) -> Optional[Dict]:
@@ -82,10 +85,104 @@ async def create_user(telegram_id: int, username: str, first_name: str):
             "losses": 0,
             "current_streak": 0,
             "longest_streak": 0,
+            "daily_streak": 0,
+            "daily_claimed_date": "",
             "created_at": datetime.now(timezone.utc),
         }},
         upsert=True,
     )
+
+
+async def record_economy_event(
+    telegram_id: int,
+    event: str,
+    amount: int,
+    *,
+    wallet_delta: int = 0,
+    bank_delta: int = 0,
+    counterparty_id: Optional[int] = None,
+):
+    """Write an audit-friendly economy entry without blocking the balance change."""
+    try:
+        payload = {
+            "telegram_id": telegram_id,
+            "event": event,
+            "amount": amount,
+            "wallet_delta": wallet_delta,
+            "bank_delta": bank_delta,
+            "created_at": datetime.now(timezone.utc),
+        }
+        if counterparty_id is not None:
+            payload["counterparty_id"] = counterparty_id
+        await _col("economy_logs").insert_one(payload)
+    except Exception:
+        # A history write must never undo or hide a successful balance update.
+        pass
+
+
+async def get_economy_history(telegram_id: int, limit: int = 10) -> List[Dict]:
+    cursor = (
+        _col("economy_logs")
+        .find({"telegram_id": telegram_id})
+        .sort("created_at", -1)
+        .limit(limit)
+    )
+    docs = await cursor.to_list(length=limit)
+    return [_to_dict(doc) for doc in docs]
+
+
+async def claim_daily_reward(telegram_id: int) -> Optional[Dict]:
+    """Claim one UTC daily reward atomically, with a capped streak bonus."""
+    now = datetime.now(timezone.utc)
+    today = now.strftime("%Y-%m-%d")
+    yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+    current = await get_user(telegram_id)
+    if not current:
+        return None
+    if current.get("daily_claimed_date") == today:
+        return {
+            "claimed": False,
+            "streak": int(current.get("daily_streak", 0) or 0),
+            "reward": 0,
+        }
+
+    previous_streak = int(current.get("daily_streak", 0) or 0)
+    streak = previous_streak + 1 if current.get("daily_claimed_date") == yesterday else 1
+    reward = 100 + min(streak - 1, 6) * 50
+    updated = await _col("users").find_one_and_update(
+        {
+            "telegram_id": telegram_id,
+            "$or": [
+                {"daily_claimed_date": {"$ne": today}},
+                {"daily_claimed_date": {"$exists": False}},
+            ],
+        },
+        {
+            "$inc": {"coins": reward},
+            "$set": {
+                "daily_claimed_date": today,
+                "daily_streak": streak,
+            },
+        },
+        return_document=ReturnDocument.AFTER,
+    )
+    if not updated:
+        return {"claimed": False, "streak": previous_streak, "reward": 0}
+
+    await record_economy_event(
+        telegram_id,
+        "daily_reward",
+        reward,
+        wallet_delta=reward,
+    )
+    return {
+        "claimed": True,
+        "streak": streak,
+        "reward": reward,
+        "next_at": (now + timedelta(days=1)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ),
+    }
 
 
 
@@ -344,6 +441,13 @@ async def update_user_stats(telegram_id: int, won: bool, coins_delta: int):
             "longest_streak": new_longest,
         }},
     )
+    if coins_delta:
+        await record_economy_event(
+            telegram_id,
+            "game_win" if won else "game_adjustment",
+            coins_delta,
+            wallet_delta=coins_delta,
+        )
 
 
 async def deduct_coins_for_forfeit(user_id: int, amount: int) -> bool:
@@ -353,7 +457,12 @@ async def deduct_coins_for_forfeit(user_id: int, amount: int) -> bool:
         {"telegram_id": user_id, "coins": {"$gte": amount}},
         {"$inc": {"coins": -amount}},
     )
-    return result.modified_count > 0
+    success = result.modified_count > 0
+    if success:
+        await record_economy_event(
+            user_id, "forfeit_fee", -amount, wallet_delta=-amount
+        )
+    return success
 
 
 async def cancel_room(room_id: str):
@@ -409,6 +518,20 @@ async def transfer_coins(from_id: int, to_id: int, amount: int) -> bool:
             {"telegram_id": from_id}, {"$inc": {"coins": amount}}
         )
         return False
+    await record_economy_event(
+        from_id,
+        "transfer_sent",
+        -amount,
+        wallet_delta=-amount,
+        counterparty_id=to_id,
+    )
+    await record_economy_event(
+        to_id,
+        "transfer_received",
+        amount,
+        wallet_delta=amount,
+        counterparty_id=from_id,
+    )
     return True
 
 async def add_coins(user_id: int, amount: int) -> bool:
@@ -417,7 +540,10 @@ async def add_coins(user_id: int, amount: int) -> bool:
         {"telegram_id": user_id},
         {"$inc": {"coins": amount}}
     )
-    return result.modified_count > 0
+    success = result.modified_count > 0
+    if success:
+        await record_economy_event(user_id, "coin_grant", amount, wallet_delta=amount)
+    return success
 
 async def get_total_coins(user_id: int) -> int:
     user = await get_user(user_id)
@@ -434,7 +560,12 @@ async def deposit_coins(user_id: int, amount: int) -> bool:
         {"telegram_id": user_id, "coins": {"$gte": amount}},
         {"$inc": {"coins": -amount, "bank": amount}},
     )
-    return result.modified_count > 0
+    success = result.modified_count > 0
+    if success:
+        await record_economy_event(
+            user_id, "deposit", amount, wallet_delta=-amount, bank_delta=amount
+        )
+    return success
 
 
 async def withdraw_coins(user_id: int, amount: int) -> bool:
@@ -445,7 +576,12 @@ async def withdraw_coins(user_id: int, amount: int) -> bool:
         {"telegram_id": user_id, "bank": {"$gte": amount}},
         {"$inc": {"bank": -amount, "coins": amount}},
     )
-    return result.modified_count > 0
+    success = result.modified_count > 0
+    if success:
+        await record_economy_event(
+            user_id, "withdraw", amount, wallet_delta=amount, bank_delta=-amount
+        )
+    return success
 
 
 async def place_bet(user_id: int, amount: int) -> bool:
@@ -456,7 +592,10 @@ async def place_bet(user_id: int, amount: int) -> bool:
         {"telegram_id": user_id, "coins": {"$gte": amount}},
         {"$inc": {"coins": -amount}},
     )
-    return result.modified_count > 0
+    success = result.modified_count > 0
+    if success:
+        await record_economy_event(user_id, "bet_stake", -amount, wallet_delta=-amount)
+    return success
 
 
 async def resolve_bet(user_id: int, payout: int) -> bool:
@@ -466,7 +605,10 @@ async def resolve_bet(user_id: int, payout: int) -> bool:
     result = await _col("users").update_one(
         {"telegram_id": user_id}, {"$inc": {"coins": payout}}
     )
-    return result.modified_count > 0
+    success = result.modified_count > 0
+    if success:
+        await record_economy_event(user_id, "bet_payout", payout, wallet_delta=payout)
+    return success
 
 
 async def consume_steal_attempt(user_id: int) -> tuple[bool, int]:
@@ -513,6 +655,20 @@ async def perform_steal(thief_id: int, target_id: int, amount: int, received: in
         "thief_id": thief_id, "target_id": target_id, "amount": amount,
         "received": received, "created_at": datetime.now(timezone.utc),
     })
+    await record_economy_event(
+        thief_id,
+        "steal_received",
+        received,
+        wallet_delta=received,
+        counterparty_id=target_id,
+    )
+    await record_economy_event(
+        target_id,
+        "stolen_from",
+        -amount,
+        wallet_delta=-amount,
+        counterparty_id=thief_id,
+    )
     return True
 
 
