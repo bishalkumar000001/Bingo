@@ -17,6 +17,13 @@ A turn-based multiplayer Bingo Telegram bot where players call numbers alternate
 | `/bingo` | Create a match room (use in a group chat) |
 | `/cancel` | Forfeit your current active game |
 | `/profile` | View your coins, wins, losses, and streaks |
+| `/balance` or `/wallet` | Open the interactive Bingo Vault with quick deposit, withdraw, bet, and steal actions |
+| `/daily` | Claim a UTC daily reward with a streak bonus |
+| `/transactions` or `/history` | View recent coin activity |
+| `/deposit <amount>` | Move wallet coins into the protected bank (`all` is supported) |
+| `/withdraw <amount>` | Move bank coins back into the wallet (`all` is supported) |
+| `/bet <amount>` or `bbet <amount>` | Play a 50/50 wallet bet; `all` is supported |
+| `/steal @username` or `ssteal @username` | Use the daily wallet-steal mode, or reply to a player's message |
 | `/leaderboard` | Top 10 players |
 | `/stopbingo` | Cancel all active rooms in the group (admins only) |
 | `/tournament create Name \| max \| entry \| prize \| rules` | Create an owner-managed knockout tournament |
@@ -64,6 +71,8 @@ cp .env.example .env
 |---|---|
 | `TELEGRAM_BOT_TOKEN` | Get from [@BotFather](https://t.me/BotFather) |
 | `MONGODB_URI` | Your MongoDB connection string (Atlas or self-hosted) |
+| `OWNER_ID` | Optional primary owner Telegram ID (kept for backward compatibility) |
+| `OWNER_IDS` | Optional comma- or semicolon-separated Telegram IDs for multiple owners |
 
 ### 4. Run the bot
 
@@ -177,6 +186,10 @@ velocity-bingo-bot/
 - Players must `/start` the bot in DM before joining (so cards can be sent privately)
 - Win = **5 completed lines** (rows, columns, or diagonals on a 5×5 grid)
 - Winner earns **500 coins**
+- Wallet coins can be moved into a protected bank with `/deposit` and brought back with `/withdraw`
+- Daily rewards start at 100 coins and grow with a consecutive-day streak, capped at 400 coins
+- Deposits, withdrawals, bets, wins, steals, transfers, grants, and forfeit fees are recorded in the economy history
+- `/bet`/`bbet` uses wallet coins only; `/steal`/`ssteal` has a 10-attempt daily limit and never touches banked coins
 - Forfeit with `/cancel` — opponent wins automatically
 - After a game ends, either player can click **🔄 Rematch** to play again instantly
 
