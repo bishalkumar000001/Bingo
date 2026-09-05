@@ -479,7 +479,34 @@ async def get_leaderboard_filtered(
     ]).to_list(length=None)
     economy_docs = await _col("economy_logs").aggregate([
         {"$match": economy_match},
-        {"$group": {"_id": "$telegram_id", "coins": {"$sum": {"$ifNull": ["$amount", 0]}}, "activity": {"$sum": 1}}},
+        {"$group": {
+            "_id": "$telegram_id",
+            # Period leaderboards must use NET coin movement, not the gross
+            # transaction amount.  Deposits/withdrawals cancel out, transfers
+            # are + for the receiver and - for the sender, and bets count the
+            # stake/payout deltas.  Summing `amount` was inflating period scores.
+            "coins": {"$sum": {
+                "$cond": [
+                    {"$or": [
+                        {"$ne": [{"$ifNull": ["$wallet_delta", None]}, None]},
+                        {"$ne": [{"$ifNull": ["$bank_delta", None]}, None]},
+                    ]},
+                    {"$add": [
+                        {"$ifNull": ["$wallet_delta", 0]},
+                        {"$ifNull": ["$bank_delta", 0]},
+                    ]},
+                    {"$switch": {
+                        "branches": [
+                            {"case": {"$in": ["$event", ["deposit", "withdraw"]]}, "then": 0},
+                            {"case": {"$in": ["$event", ["bet_stake", "stolen_from", "transfer_sent", "forfeit_fee"]]}, "then": {"$subtract": [0, {"$abs": {"$ifNull": ["$amount", 0]}}]}},
+                            {"case": {"$in": ["$event", ["bet_payout", "daily_reward", "steal_received", "transfer_received", "coin_grant", "game_win"]]}, "then": {"$abs": {"$ifNull": ["$amount", 0]}}},
+                        ],
+                        "default": {"$ifNull": ["$amount", 0]},
+                    }}
+                ]
+            }},
+            "activity": {"$sum": 1}
+        }},
     ]).to_list(length=None)
     totals: Dict[int, Dict[str, int]] = {}
     for row in game_docs + economy_docs:
