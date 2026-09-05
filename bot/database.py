@@ -418,7 +418,7 @@ async def get_leaderboard_filtered(
             {"$sort": {"coins": -1, "wins": -1}},
             {"$limit": limit},
         ]
-        docs = await (await _col("economy_logs").aggregate(pipeline)).to_list(length=limit)
+        docs = await _col("economy_logs").aggregate(pipeline).to_list(length=limit)
         return [_to_dict(d) for d in docs]
 
     start = _time_filter_start(time_filter)
@@ -446,7 +446,7 @@ async def get_leaderboard_filtered(
         {"$sort": {"coins": -1, "activity": -1}},
         {"$limit": limit},
     ]
-    docs = await (await _col("economy_logs").aggregate(pipeline)).to_list(length=limit)
+    docs = await _col("economy_logs").aggregate(pipeline).to_list(length=limit)
     return [_to_dict(d) for d in docs]
 
 
