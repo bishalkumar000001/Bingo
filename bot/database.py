@@ -101,6 +101,7 @@ async def record_economy_event(
     wallet_delta: int = 0,
     bank_delta: int = 0,
     counterparty_id: Optional[int] = None,
+    chat_id: int = 0,
 ):
     """Write an audit-friendly economy entry without blocking the balance change."""
     try:
@@ -114,6 +115,8 @@ async def record_economy_event(
         }
         if counterparty_id is not None:
             payload["counterparty_id"] = counterparty_id
+        if chat_id:
+            payload["chat_id"] = chat_id
         await _col("economy_logs").insert_one(payload)
     except Exception:
         # A history write must never undo or hide a successful balance update.
@@ -131,7 +134,7 @@ async def get_economy_history(telegram_id: int, limit: int = 10) -> List[Dict]:
     return [_to_dict(doc) for doc in docs]
 
 
-async def claim_daily_reward(telegram_id: int) -> Optional[Dict]:
+async def claim_daily_reward(telegram_id: int, chat_id: int = 0) -> Optional[Dict]:
     """Claim one UTC daily reward atomically, with a capped streak bonus."""
     now = datetime.now(timezone.utc)
     today = now.strftime("%Y-%m-%d")
@@ -174,6 +177,7 @@ async def claim_daily_reward(telegram_id: int) -> Optional[Dict]:
         "daily_reward",
         reward,
         wallet_delta=reward,
+        chat_id=chat_id,
     )
     return {
         "claimed": True,
@@ -379,49 +383,74 @@ async def get_leaderboard(limit: int = 10) -> List[Dict]:
 async def get_leaderboard_filtered(
     scope: str, chat_id: int, time_filter: str, limit: int = 10
 ) -> List[Dict]:
-    # For global all-time leaderboard, use stored `users.coins` to preserve
-    # historical totals that may not be reflected in `game_results`.
-    if scope == "global" and time_filter == "all_time":
+    """Economy-aware leaderboard.
+
+    All-time rankings use each player's live wallet + bank wealth.  Period
+    rankings use net Bingo Coin movement recorded in economy_logs, so bets,
+    wins, steals, transfers, deposits/withdrawals and rewards update the
+    ranking automatically.  Chat rankings only include activity recorded in
+    that chat; global rankings include activity everywhere.
+    """
+    if time_filter == "all_time" and scope == "global":
         return await get_leaderboard(limit)
 
-    match: Dict = {"won": True}
+    if time_filter == "all_time" and scope == "chat" and chat_id:
+        # Find everyone who has ever generated economy/game activity in this chat,
+        # then rank them by their current total wealth.
+        pipeline = [
+            {"$match": {"chat_id": chat_id}},
+            {"$group": {"_id": "$telegram_id"}},
+            {"$lookup": {"from": "users", "localField": "_id", "foreignField": "telegram_id", "as": "user_doc"}},
+            {"$unwind": "$user_doc"},
+            {"$addFields": {"total_coins": {"$add": [
+                {"$ifNull": ["$user_doc.coins", 0]},
+                {"$ifNull": ["$user_doc.bank", 0]},
+            ]}}},
+            {"$project": {
+                "_id": 0,
+                "telegram_id": "$_id",
+                "username": "$user_doc.username",
+                "first_name": "$user_doc.first_name",
+                "games_played": "$user_doc.games_played",
+                "wins": "$user_doc.wins",
+                "coins": "$total_coins",
+            }},
+            {"$sort": {"coins": -1, "wins": -1}},
+            {"$limit": limit},
+        ]
+        docs = await (await _col("economy_logs").aggregate(pipeline)).to_list(length=limit)
+        return [_to_dict(d) for d in docs]
 
+    start = _time_filter_start(time_filter)
+    match: Dict = {}
+    if start:
+        match["created_at"] = {"$gte": start}
     if scope == "chat" and chat_id:
         match["chat_id"] = chat_id
 
-    start = _time_filter_start(time_filter)
-    if start:
-        match["created_at"] = {"$gte": start}
-
-    # Aggregate wins and sum of coins awarded during the period from game_results
     pipeline = [
         {"$match": match},
-        {"$group": {"_id": "$telegram_id", "wins": {"$sum": 1}, "coins": {"$sum": "$coins"}}},
-        {"$lookup": {
-            "from": "users",
-            "localField": "_id",
-            "foreignField": "telegram_id",
-            "as": "user_doc",
-        }},
+        {"$group": {"_id": "$telegram_id", "coins": {"$sum": {"$ifNull": ["$amount", 0]}}, "activity": {"$sum": 1}}},
+        {"$lookup": {"from": "users", "localField": "_id", "foreignField": "telegram_id", "as": "user_doc"}},
         {"$unwind": "$user_doc"},
         {"$project": {
             "_id": 0,
             "telegram_id": "$_id",
-            "wins": 1,
             "username": "$user_doc.username",
             "first_name": "$user_doc.first_name",
-            "coins": 1,
             "games_played": "$user_doc.games_played",
+            "wins": "$user_doc.wins",
+            "activity": 1,
+            "coins": 1,
         }},
-        {"$sort": {"coins": -1, "wins": -1}},
+        {"$sort": {"coins": -1, "activity": -1}},
         {"$limit": limit},
     ]
+    docs = await (await _col("economy_logs").aggregate(pipeline)).to_list(length=limit)
+    return [_to_dict(d) for d in docs]
 
-    cursor = _col("game_results").aggregate(pipeline)
-    return await cursor.to_list(length=limit)
 
-
-async def update_user_stats(telegram_id: int, won: bool, coins_delta: int):
+async def update_user_stats(telegram_id: int, won: bool, coins_delta: int, chat_id: int = 0):
     user = await get_user(telegram_id)
     if not user:
         return
@@ -447,6 +476,7 @@ async def update_user_stats(telegram_id: int, won: bool, coins_delta: int):
             "game_win" if won else "game_adjustment",
             coins_delta,
             wallet_delta=coins_delta,
+            chat_id=chat_id,
         )
 
 
@@ -487,7 +517,7 @@ async def get_player_active_room(player_id: int) -> Optional[Dict]:
     return _to_dict(doc)
 
 
-async def transfer_coins(from_id: int, to_id: int, amount: int) -> bool:
+async def transfer_coins(from_id: int, to_id: int, amount: int, chat_id: int = 0) -> bool:
     """Atomically transfer wallet coins from one member to another.
 
     Normal members must have enough wallet coins; the caller is responsible
@@ -524,6 +554,7 @@ async def transfer_coins(from_id: int, to_id: int, amount: int) -> bool:
         -amount,
         wallet_delta=-amount,
         counterparty_id=to_id,
+        chat_id=chat_id,
     )
     await record_economy_event(
         to_id,
@@ -531,10 +562,11 @@ async def transfer_coins(from_id: int, to_id: int, amount: int) -> bool:
         amount,
         wallet_delta=amount,
         counterparty_id=from_id,
+        chat_id=chat_id,
     )
     return True
 
-async def add_coins(user_id: int, amount: int) -> bool:
+async def add_coins(user_id: int, amount: int, chat_id: int = 0) -> bool:
     """Add coins to a user without deducting from anyone."""
     result = await _col("users").update_one(
         {"telegram_id": user_id},
@@ -542,7 +574,7 @@ async def add_coins(user_id: int, amount: int) -> bool:
     )
     success = result.modified_count > 0
     if success:
-        await record_economy_event(user_id, "coin_grant", amount, wallet_delta=amount)
+        await record_economy_event(user_id, "coin_grant", amount, wallet_delta=amount, chat_id=chat_id)
     return success
 
 async def get_total_coins(user_id: int) -> int:
@@ -552,7 +584,7 @@ async def get_total_coins(user_id: int) -> int:
     return int(user.get("coins", 0) or 0) + int(user.get("bank", 0) or 0)
 
 
-async def deposit_coins(user_id: int, amount: int) -> bool:
+async def deposit_coins(user_id: int, amount: int, chat_id: int = 0) -> bool:
     """Move coins from wallet to bank atomically."""
     if amount <= 0:
         return False
@@ -568,7 +600,7 @@ async def deposit_coins(user_id: int, amount: int) -> bool:
     return success
 
 
-async def withdraw_coins(user_id: int, amount: int) -> bool:
+async def withdraw_coins(user_id: int, amount: int, chat_id: int = 0) -> bool:
     """Move coins from bank to wallet atomically."""
     if amount <= 0:
         return False
@@ -584,7 +616,7 @@ async def withdraw_coins(user_id: int, amount: int) -> bool:
     return success
 
 
-async def place_bet(user_id: int, amount: int) -> bool:
+async def place_bet(user_id: int, amount: int, chat_id: int = 0) -> bool:
     """Atomically reserve a bet from the wallet."""
     if amount <= 0:
         return False
@@ -594,11 +626,11 @@ async def place_bet(user_id: int, amount: int) -> bool:
     )
     success = result.modified_count > 0
     if success:
-        await record_economy_event(user_id, "bet_stake", -amount, wallet_delta=-amount)
+        await record_economy_event(user_id, "bet_stake", -amount, wallet_delta=-amount, chat_id=chat_id)
     return success
 
 
-async def resolve_bet(user_id: int, payout: int) -> bool:
+async def resolve_bet(user_id: int, payout: int, chat_id: int = 0) -> bool:
     """Credit a resolved bet payout to the wallet."""
     if payout <= 0:
         return False
@@ -635,7 +667,7 @@ async def consume_steal_attempt(user_id: int) -> tuple[bool, int]:
     return False, int(user.get("steal_count", 10) if user else 10)
 
 
-async def perform_steal(thief_id: int, target_id: int, amount: int, received: int) -> bool:
+async def perform_steal(thief_id: int, target_id: int, amount: int, received: int, chat_id: int = 0) -> bool:
     """Atomically steal amount from target and credit received to thief."""
     if amount <= 0 or received <= 0 or thief_id == target_id:
         return False
@@ -661,6 +693,7 @@ async def perform_steal(thief_id: int, target_id: int, amount: int, received: in
         received,
         wallet_delta=received,
         counterparty_id=target_id,
+        chat_id=chat_id,
     )
     await record_economy_event(
         target_id,
@@ -668,6 +701,7 @@ async def perform_steal(thief_id: int, target_id: int, amount: int, received: in
         -amount,
         wallet_delta=-amount,
         counterparty_id=thief_id,
+        chat_id=chat_id,
     )
     return True
 

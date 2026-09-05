@@ -608,13 +608,13 @@ def _amount_from_share(raw: str, balance: int):
     return balance * share // 100
 
 
-async def _settle_bet(user_id: int, amount: int):
+async def _settle_bet(user_id: int, amount: int, chat_id: int = 0):
     """Reserve and resolve one bet, returning None if the reserve failed."""
-    if not await db.place_bet(user_id, amount):
+    if not await db.place_bet(user_id, amount, chat_id):
         return None
     won = random.choice((True, False))
     if won:
-        await db.resolve_bet(user_id, amount * 2)
+        await db.resolve_bet(user_id, amount * 2, chat_id)
     return won
 
 
@@ -719,7 +719,7 @@ async def cmd_bank(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = await _ensure_user(update)
-    reward = await db.claim_daily_reward(user["telegram_id"])
+    reward = await db.claim_daily_reward(user["telegram_id"], update.effective_chat.id if update.effective_chat else 0)
     if not reward:
         await _reply_economy_photo(update, "❌ <b>WALLET NOT FOUND</b>\n\nPlease send /start first to create your Velocity wallet.", "daily", reply_markup=_economy_keyboard(user["telegram_id"]))
         return
@@ -784,7 +784,7 @@ async def handle_economy_callback(update: Update, context: ContextTypes.DEFAULT_
         return
 
     if action == "daily":
-        reward = await db.claim_daily_reward(owner_id)
+        reward = await db.claim_daily_reward(owner_id, query.message.chat_id if query.message else 0)
         if not reward or not reward["claimed"]:
             streak = reward["streak"] if reward else 0
             await query.answer("Daily reward already claimed today.", show_alert=True)
@@ -841,7 +841,7 @@ async def handle_economy_callback(update: Update, context: ContextTypes.DEFAULT_
         if not amount:
             await query.answer("Your wallet is too small for that bet.", show_alert=True)
             return
-        won = await _settle_bet(owner_id, amount)
+        won = await _settle_bet(owner_id, amount, query.message.chat_id if query.message else 0)
         if won is None:
             await query.answer("Bet could not be placed. Refresh your wallet.", show_alert=True)
             return
@@ -875,9 +875,9 @@ async def handle_economy_callback(update: Update, context: ContextTypes.DEFAULT_
         return
 
     success = (
-        await db.deposit_coins(owner_id, amount)
+        await db.deposit_coins(owner_id, amount, query.message.chat_id if query.message else 0)
         if action == "deposit"
-        else await db.withdraw_coins(owner_id, amount)
+        else await db.withdraw_coins(owner_id, amount, query.message.chat_id if query.message else 0)
     )
     if not success:
         await query.answer("Your balance changed. Refresh and try again.", show_alert=True)
@@ -918,7 +918,7 @@ async def cmd_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
             update, "❌ <b>INVALID AMOUNT</b>\n\nPlease enter a positive number or use <code>all</code>.", "deposit", reply_markup=_economy_keyboard(user["telegram_id"])
         )
         return
-    if not await db.deposit_coins(update.effective_user.id, amount):
+    if not await db.deposit_coins(update.effective_user.id, amount, update.effective_chat.id if update.effective_chat else 0):
         await _reply_economy_photo(
             update,
             f"❌ <b>DEPOSIT FAILED</b>\n\nYour wallet has <b>{wallet:,}</b> coins, so <b>{amount:,}</b> could not be moved to the bank. Check your balance and try again.",
@@ -961,7 +961,7 @@ async def cmd_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
             update, "❌ <b>INVALID AMOUNT</b>\n\nPlease enter a positive number or use <code>all</code>.", "withdraw", reply_markup=_economy_keyboard(user["telegram_id"])
         )
         return
-    if not await db.withdraw_coins(update.effective_user.id, amount):
+    if not await db.withdraw_coins(update.effective_user.id, amount, update.effective_chat.id if update.effective_chat else 0):
         await _reply_economy_photo(
             update,
             f"❌ <b>WITHDRAWAL FAILED</b>\n\nYour bank has <b>{bank:,}</b> coins, so <b>{amount:,}</b> could not be withdrawn. Check your balance and try again.",
@@ -1009,7 +1009,7 @@ async def cmd_bet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if amount > wallet:
         await _reply_economy_photo(update, f"❌ <b>NOT ENOUGH COINS</b>\n\nYour wallet has <b>{wallet:,}</b> coins, but this bet needs <b>{amount:,}</b>. Deposit protected coins only when you want to move them back into your wallet.", "bbet" if (update.message.text or "").lower().startswith("bbet") else "bet", reply_markup=_economy_keyboard(user["telegram_id"]))
         return
-    won = await _settle_bet(update.effective_user.id, amount)
+    won = await _settle_bet(update.effective_user.id, amount, update.effective_chat.id if update.effective_chat else 0)
     if won is None:
         await _reply_economy_photo(update, "❌ <b>BET NOT PLACED</b>\n\nYour balance changed before the bet could be completed. Refresh your wallet and try again.", "bbet" if (update.message.text or "").lower().startswith("bbet") else "bet", reply_markup=_economy_keyboard(user["telegram_id"]))
         return
@@ -1122,7 +1122,7 @@ async def cmd_steal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=_economy_keyboard(thief["telegram_id"]),
         )
         return
-    success = await db.perform_steal(thief_id, target_id, amount, received)
+    success = await db.perform_steal(thief_id, target_id, amount, received, update.effective_chat.id if update.effective_chat else 0)
     target_name = display_name_from_db(target)
     if not success:
         await _reply_economy_photo(
@@ -1209,13 +1209,15 @@ async def cmd_give(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_owner:
         success = await db.add_coins(
             recipient["telegram_id"],
-            amount
+            amount,
+            update.effective_chat.id if update.effective_chat else 0,
         )
     else:
         success = await db.transfer_coins(
             user.id,
             recipient["telegram_id"],
-            amount
+            amount,
+            update.effective_chat.id if update.effective_chat else 0,
         )
     
     if not success:
