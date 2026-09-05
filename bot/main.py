@@ -82,6 +82,22 @@ ECONOMY_PHOTOS = {
 def _economy_photo(key: str) -> str:
     return ECONOMY_PHOTOS.get(key, ECONOMY_PHOTOS["balance"])
 
+async def _group_only_economy(update: Update, key: str = "balance") -> bool:
+    """Allow betting, stealing, deposits and withdrawals only in groups."""
+    chat = update.effective_chat
+    if chat and chat.type in ("group", "supergroup"):
+        return True
+    text = (
+        "🎮 <b>GROUP ONLY</b>\n\n"
+        "This economy action is available only inside a Velocity Bingo group. "
+        "Add the bot to a group and use it there to play, manage or move your coins. 💎"
+    )
+    if getattr(update, "message", None):
+        await _reply_economy_photo(update, text, key)
+    elif getattr(update, "callback_query", None):
+        await update.callback_query.answer("This economy action is available only in groups.", show_alert=True)
+    return False
+
 async def _reply_economy_photo(update: Update, text: str, key: str = "balance", *, reply_markup=None):
     photo = _economy_photo(key)
     if os.path.exists(photo):
@@ -758,6 +774,10 @@ async def handle_economy_callback(update: Update, context: ContextTypes.DEFAULT_
         await query.answer("This wallet panel belongs to another player.", show_alert=True)
         return
 
+    if action in ("bet", "deposit", "withdraw", "steal") and update.effective_chat.type == "private":
+        await query.answer("This economy action is available only in groups.", show_alert=True)
+        return
+
     player = await db.get_user(owner_id)
     if not player:
         await query.answer("Send /start first to create your wallet.", show_alert=True)
@@ -875,6 +895,8 @@ async def handle_economy_callback(update: Update, context: ContextTypes.DEFAULT_
 
 
 async def cmd_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await _group_only_economy(update, "deposit"):
+        return
     user = await _ensure_user(update)
     if not context.args:
         await _reply_economy_photo(
@@ -916,6 +938,8 @@ async def cmd_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await _group_only_economy(update, "withdraw"):
+        return
     user = await _ensure_user(update)
     if not context.args:
         await _reply_economy_photo(
@@ -957,6 +981,8 @@ async def cmd_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_bet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await _group_only_economy(update, "bet"):
+        return
     user = await _ensure_user(update)
     args = list(context.args)
     # MessageHandler does not populate context.args for plain-text aliases.
@@ -1031,6 +1057,8 @@ async def _resolve_target(update: Update, context: ContextTypes.DEFAULT_TYPE, ar
 
 
 async def cmd_steal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await _group_only_economy(update, "steal"):
+        return
     thief = await _ensure_user(update)
     args = list(context.args)
     if not args and update.message and update.message.text:
