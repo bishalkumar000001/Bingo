@@ -5,7 +5,7 @@ import random
 import re
 from html import escape
 from datetime import timezone
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -62,6 +62,56 @@ logging.basicConfig(
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
+
+# Economy artwork generated for the Velocity Bingo economy UI.
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ECONOMY_ASSETS = os.path.join(BASE_DIR, "attached_assets", "economy")
+ECONOMY_PHOTOS = {
+    "balance": os.path.join(ECONOMY_ASSETS, "balance.jpg"),
+    "bet": os.path.join(ECONOMY_ASSETS, "bet.jpg"),
+    "bbet": os.path.join(ECONOMY_ASSETS, "bbet.jpg"),
+    "steal": os.path.join(ECONOMY_ASSETS, "steal.jpg"),
+    "ssteal": os.path.join(ECONOMY_ASSETS, "ssteal.jpg"),
+    "deposit": os.path.join(ECONOMY_ASSETS, "deposit.jpg"),
+    "withdraw": os.path.join(ECONOMY_ASSETS, "withdraw.jpg"),
+    "transfer": os.path.join(ECONOMY_ASSETS, "transfer.jpg"),
+    "history": os.path.join(ECONOMY_ASSETS, "history.jpg"),
+    "daily": os.path.join(ECONOMY_ASSETS, "daily.jpg"),
+}
+
+def _economy_photo(key: str) -> str:
+    return ECONOMY_PHOTOS.get(key, ECONOMY_PHOTOS["balance"])
+
+async def _reply_economy_photo(update: Update, text: str, key: str = "balance", *, reply_markup=None):
+    photo = _economy_photo(key)
+    if os.path.exists(photo):
+        with open(photo, "rb") as fh:
+            return await update.message.reply_photo(
+                photo=fh, caption=text, parse_mode="HTML", reply_markup=reply_markup
+            )
+    return await update.message.reply_text(text, parse_mode="HTML", reply_markup=reply_markup)
+
+async def _edit_economy_photo(query, text: str, key: str = "balance", *, reply_markup=None):
+    photo = _economy_photo(key)
+    if os.path.exists(photo):
+        with open(photo, "rb") as fh:
+            try:
+                return await query.edit_message_media(
+                    media=InputMediaPhoto(media=fh, caption=text, parse_mode="HTML"),
+                    reply_markup=reply_markup,
+                )
+            except BadRequest as exc:
+                # If the current message is already a photo with identical content,
+                # Telegram may reject the edit; fall back to a caption edit.
+                if "not modified" not in str(exc).lower():
+                    raise
+                return None
+    try:
+        return await query.edit_message_text(
+            text, parse_mode="HTML", reply_markup=reply_markup
+        )
+    except BadRequest:
+        return None
 
 
 async def _send_help_message(update: Update, context: ContextTypes.DEFAULT_TYPE, *, via_callback=False):
@@ -522,18 +572,11 @@ def _economy_text(player: dict) -> str:
     name = escape(display_name_from_db(player))
 
     return (
-        "╭━━━━━━━━━━━━━━━━━━━━╮\n"
-        "│  💎 <b>BINGO VAULT</b>  │\n"
-        "╰━━━━━━━━━━━━━━━━━━━━╯\n\n"
-        f"👤 <b>{name}</b>\n\n"
-        f"👛 <b>Wallet</b>  <code>{wallet:,}</code>\n"
-        f"🏦 <b>Bank</b>    <code>{bank:,}</code>\n"
-        f"💰 <b>Total wealth</b>  <code>{total:,}</code>\n"
-        f"   <code>{_coin_bar(wallet, total)}</code>  ▰ wallet  ▱ bank\n\n"
-        f"🎮 {games} games  •  🏆 {wins} wins  •  📈 {win_rate:.1f}% win rate\n"
-        f"🔥 Daily streak: <b>{daily_streak}</b>\n\n"
-        "💡 Wallet coins are ready for games, bets and steals.\n"
-        "   Bank coins stay protected until you withdraw them."
+        f"💎 <b>VELOCITY VAULT</b>\n\n"
+        f"👤 <b>{name}</b> • 👛 <b>{wallet:,}</b> wallet • 🏦 <b>{bank:,}</b> bank\n"
+        f"💰 <b>Total wealth:</b> {total:,} coins\n"
+        f"🎮 {games} games • 🏆 {wins} wins • 📈 {win_rate:.1f}% win rate • 🔥 {daily_streak}-day streak\n\n"
+        "Your wallet is ready for Bingo, bets and steals, while banked coins stay protected. Use the buttons below to move coins, claim rewards or check your history."
     )
 
 
@@ -560,15 +603,12 @@ async def _settle_bet(user_id: int, amount: int):
 
 
 async def _show_economy_panel(query, player: dict):
-    try:
-        await query.edit_message_text(
-            _economy_text(player),
-            parse_mode="HTML",
-            reply_markup=_economy_keyboard(player["telegram_id"]),
-        )
-    except BadRequest:
-        # Telegram returns this when Refresh is pressed without changes.
-        pass
+    await _edit_economy_photo(
+        query,
+        _economy_text(player),
+        "balance",
+        reply_markup=_economy_keyboard(player["telegram_id"]),
+    )
 
 
 def _history_event_label(event: str) -> str:
@@ -590,37 +630,30 @@ def _history_event_label(event: str) -> str:
 
 def _economy_history_text(player: dict, history: list[dict]) -> str:
     lines = [
-        "╭━━━━━━━━━━━━━━━━━━━━╮",
-        "│  🧾 <b>COIN HISTORY</b>  │",
-        "╰━━━━━━━━━━━━━━━━━━━━╯",
-        "",
+        "📜 <b>COIN HISTORY</b>",
         f"👤 <b>{escape(display_name_from_db(player))}</b>",
-        "",
     ]
     if not history:
-        lines.append("📭 No economy activity recorded yet.")
+        lines.append("\nYour economy history is empty. Start playing, betting or moving coins to see your activity here.")
         return "\n".join(lines)
 
-    for entry in history:
+    recent = []
+    for entry in history[:6]:
         amount = int(entry.get("amount", 0) or 0)
         sign = "+" if amount > 0 else ""
-        created = entry.get("created_at")
-        if created and created.tzinfo is None:
-            created = created.replace(tzinfo=timezone.utc)
-        stamp = created.strftime("%d %b, %H:%M") if created else "recently"
-        lines.append(
-            f"{_history_event_label(entry.get('event', 'activity'))} "
-            f"<b>{sign}{amount:,}</b>  <i>{stamp} UTC</i>"
-        )
-    lines.extend(["", "Use /balance to return to your vault."])
+        event = _history_event_label(entry.get("event", "activity"))
+        recent.append(f"{event}: <b>{sign}{amount:,}</b>")
+    lines.append("\n" + " • ".join(recent))
+    lines.append("\nYour latest coin activity is shown above. Use the wallet buttons to manage your balance.")
     return "\n".join(lines)
 
 
 async def _show_economy_history(query, player: dict):
     history = await db.get_economy_history(player["telegram_id"])
-    await query.edit_message_text(
+    await _edit_economy_photo(
+        query,
         _economy_history_text(player, history),
-        parse_mode="HTML",
+        "history",
         reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton(
                 "⬅️ Back to Vault",
@@ -643,9 +676,10 @@ def _parse_amount_arg(raw: str):
 
 async def cmd_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = await _ensure_user(update)
-    await update.message.reply_text(
+    await _reply_economy_photo(
+        update,
         _economy_text(user),
-        parse_mode="HTML",
+        "balance",
         reply_markup=_economy_keyboard(user["telegram_id"]),
     )
 
@@ -655,29 +689,43 @@ async def cmd_economy(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await cmd_balance(update, context)
 
 
+async def cmd_bank(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = await _ensure_user(update)
+    wallet = int(user.get("coins", 0) or 0)
+    bank = int(user.get("bank", 0) or 0)
+    total = wallet + bank
+    text = (
+        f"🏦 <b>VELOCITY BANK</b>\n\n"
+        f"Your bank holds <b>{bank:,}</b> protected coins, while <b>{wallet:,}</b> stay in your wallet for games and bets. Your total wealth is <b>{total:,}</b> coins. Deposit to protect your winnings or withdraw whenever you need them."
+    )
+    await _reply_economy_photo(update, text, "bank", reply_markup=_economy_keyboard(user["telegram_id"]))
+
+
 async def cmd_daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = await _ensure_user(update)
     reward = await db.claim_daily_reward(user["telegram_id"])
     if not reward:
-        await update.message.reply_text("❌ Your wallet could not be found. Send /start first.")
+        await _reply_economy_photo(update, "❌ <b>WALLET NOT FOUND</b>\n\nPlease send /start first to create your Velocity wallet.", "daily", reply_markup=_economy_keyboard(user["telegram_id"]))
         return
     if not reward["claimed"]:
-        await update.message.reply_text(
-            "⏳ <b>Daily reward already claimed</b>\n\n"
+        await _reply_economy_photo(
+            update,
+            "⏳ <b>DAILY REWARD ALREADY CLAIMED</b>\n\n"
             f"🔥 Current streak: <b>{reward['streak']} day(s)</b>\n"
-            "Come back after 00:00 UTC for the next reward.",
-            parse_mode="HTML",
+            "Come back after 00:00 UTC for your next reward.",
+            "daily",
             reply_markup=_economy_keyboard(user["telegram_id"]),
         )
         return
     fresh = await db.get_user(user["telegram_id"])
-    await update.message.reply_text(
+    await _reply_economy_photo(
+        update,
         "🎁 <b>DAILY REWARD CLAIMED</b>\n\n"
         f"💰 Reward: <b>+{reward['reward']:,}</b> coins\n"
         f"🔥 Streak: <b>{reward['streak']} day(s)</b>\n"
         f"👛 Wallet: <b>{int(fresh.get('coins', 0)):,}</b>\n\n"
         "Keep your streak alive to unlock bigger rewards.",
-        parse_mode="HTML",
+        "daily",
         reply_markup=_economy_keyboard(user["telegram_id"]),
     )
 
@@ -685,9 +733,10 @@ async def cmd_daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_transactions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = await _ensure_user(update)
     history = await db.get_economy_history(user["telegram_id"])
-    await update.message.reply_text(
+    await _reply_economy_photo(
+        update,
         _economy_history_text(user, history),
-        parse_mode="HTML",
+        "history",
         reply_markup=_economy_keyboard(user["telegram_id"]),
     )
 
@@ -719,20 +768,22 @@ async def handle_economy_callback(update: Update, context: ContextTypes.DEFAULT_
         if not reward or not reward["claimed"]:
             streak = reward["streak"] if reward else 0
             await query.answer("Daily reward already claimed today.", show_alert=True)
-            await query.edit_message_text(
+            await _edit_economy_photo(
+                query,
                 _economy_text(player)
                 + f"\n\n⏳ Daily reward claimed • 🔥 {streak}-day streak",
-                parse_mode="HTML",
+                "daily",
                 reply_markup=_economy_keyboard(owner_id),
             )
             return
         fresh = await db.get_user(owner_id)
         await query.answer(f"+{reward['reward']:,} coins claimed! 🎁")
-        await query.edit_message_text(
+        await _edit_economy_photo(
+            query,
             _economy_text(fresh)
             + f"\n\n🎁 <b>Daily reward:</b> +{reward['reward']:,} coins"
             + f"\n🔥 <b>Streak:</b> {reward['streak']} day(s)",
-            parse_mode="HTML",
+            "daily",
             reply_markup=_economy_keyboard(owner_id),
         )
         return
@@ -749,7 +800,8 @@ async def handle_economy_callback(update: Update, context: ContextTypes.DEFAULT_
 
     if action == "steal_help":
         await query.answer()
-        await query.edit_message_text(
+        await _edit_economy_photo(
+            query,
             "🕵️ <b>STEAL MODE</b>\n\n"
             "Reply to a player's message with <code>/steal</code>, or use "
             "<code>/steal @username</code>.\n\n"
@@ -758,7 +810,7 @@ async def handle_economy_callback(update: Update, context: ContextTypes.DEFAULT_
             "• The target must have at least 1,000 wallet coins\n"
             "• A 10% operation fee is removed from the stolen amount\n\n"
             "Use it strategically — the bank is protected.",
-            parse_mode="HTML",
+            "steal",
             reply_markup=_economy_keyboard(owner_id),
         )
         return
@@ -783,9 +835,10 @@ async def handle_economy_callback(update: Update, context: ContextTypes.DEFAULT_
             f"👛 New wallet: <b>{int(fresh.get('coins', 0)):,}</b>"
         )
         await query.answer("Bet won! 🎉" if won else "Better luck next time.")
-        await query.edit_message_text(
+        await _edit_economy_photo(
+            query,
             result + "\n\n" + _economy_text(fresh),
-            parse_mode="HTML",
+            "bet",
             reply_markup=_economy_keyboard(owner_id),
         )
         return
@@ -813,17 +866,22 @@ async def handle_economy_callback(update: Update, context: ContextTypes.DEFAULT_
     fresh = await db.get_user(owner_id)
     label = "Deposited into the bank" if action == "deposit" else "Moved to your wallet"
     await query.answer(f"{label}: {amount:,} coins.")
-    await _show_economy_panel(query, fresh)
+    await _edit_economy_photo(
+        query,
+        _economy_text(fresh) + f"\n\n✅ <b>{label}:</b> {amount:,} coins",
+        action,
+        reply_markup=_economy_keyboard(owner_id),
+    )
 
 
 async def cmd_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = await _ensure_user(update)
     if not context.args:
-        await update.message.reply_text(
-            "🏦 <b>Deposit to your protected bank</b>\n\n"
-            "Use <code>/deposit 50000</code> or <code>/deposit all</code>.\n"
-            "Your bank balance cannot be used for bets or steals.",
-            parse_mode="HTML",
+        await _reply_economy_photo(
+            update,
+            "🏦 <b>DEPOSIT</b>\n\n"
+            "Move wallet coins into your protected bank with <code>/deposit 50000</code> or <code>/deposit all</code>. Banked coins stay safe from bets and steals.",
+            "deposit",
             reply_markup=_economy_keyboard(user["telegram_id"]),
         )
         return
@@ -834,27 +892,25 @@ async def cmd_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         amount = _parse_amount_arg(amount)
     if not isinstance(amount, int) or amount <= 0:
-        await update.message.reply_text(
-            "❌ Enter a valid positive amount, or use <code>all</code>.",
-            parse_mode="HTML",
+        await _reply_economy_photo(
+            update, "❌ <b>INVALID AMOUNT</b>\n\nPlease enter a positive number or use <code>all</code>.", "deposit", reply_markup=_economy_keyboard(user["telegram_id"])
         )
         return
     if not await db.deposit_coins(update.effective_user.id, amount):
-        await update.message.reply_text(
-            f"❌ <b>Deposit not completed</b>\n\n"
-            f"👛 Available wallet: <b>{wallet:,}</b>\n"
-            f"💸 Requested: <b>{amount:,}</b>",
-            parse_mode="HTML",
-            reply_markup=_economy_keyboard(user["telegram_id"]),
+        await _reply_economy_photo(
+            update,
+            f"❌ <b>DEPOSIT FAILED</b>\n\nYour wallet has <b>{wallet:,}</b> coins, so <b>{amount:,}</b> could not be moved to the bank. Check your balance and try again.",
+            "deposit", reply_markup=_economy_keyboard(user["telegram_id"])
         )
         return
     fresh = await db.get_user(update.effective_user.id)
-    await update.message.reply_text(
-        f"✅ <b>Deposit complete</b>\n\n"
+    await _reply_economy_photo(
+        update,
+        f"✅ <b>DEPOSIT COMPLETE</b>\n\n"
         f"🏦 Protected: <b>+{amount:,}</b>\n"
         f"🏦 Bank balance: <b>{int(fresh.get('bank', 0)):,}</b>\n"
         f"💎 Total wealth: <b>{int(fresh.get('bank', 0)) + int(fresh.get('coins', 0)):,}</b>",
-        parse_mode="HTML",
+        "deposit",
         reply_markup=_economy_keyboard(user["telegram_id"]),
     )
 
@@ -862,10 +918,11 @@ async def cmd_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = await _ensure_user(update)
     if not context.args:
-        await update.message.reply_text(
-            "💸 <b>Withdraw from your protected bank</b>\n\n"
-            "Use <code>/withdraw 50000</code> or <code>/withdraw all</code>.",
-            parse_mode="HTML",
+        await _reply_economy_photo(
+            update,
+            "💸 <b>WITHDRAW</b>\n\n"
+            "Move protected coins back to your wallet with <code>/withdraw 50000</code> or <code>/withdraw all</code>. Use your wallet coins for games, bets and steals.",
+            "withdraw",
             reply_markup=_economy_keyboard(user["telegram_id"]),
         )
         return
@@ -876,27 +933,25 @@ async def cmd_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         amount = _parse_amount_arg(amount)
     if not isinstance(amount, int) or amount <= 0:
-        await update.message.reply_text(
-            "❌ Enter a valid positive amount, or use <code>all</code>.",
-            parse_mode="HTML",
+        await _reply_economy_photo(
+            update, "❌ <b>INVALID AMOUNT</b>\n\nPlease enter a positive number or use <code>all</code>.", "withdraw", reply_markup=_economy_keyboard(user["telegram_id"])
         )
         return
     if not await db.withdraw_coins(update.effective_user.id, amount):
-        await update.message.reply_text(
-            f"❌ <b>Withdrawal not completed</b>\n\n"
-            f"🏦 Available bank: <b>{bank:,}</b>\n"
-            f"💸 Requested: <b>{amount:,}</b>",
-            parse_mode="HTML",
-            reply_markup=_economy_keyboard(user["telegram_id"]),
+        await _reply_economy_photo(
+            update,
+            f"❌ <b>WITHDRAWAL FAILED</b>\n\nYour bank has <b>{bank:,}</b> coins, so <b>{amount:,}</b> could not be withdrawn. Check your balance and try again.",
+            "withdraw", reply_markup=_economy_keyboard(user["telegram_id"])
         )
         return
     fresh = await db.get_user(update.effective_user.id)
-    await update.message.reply_text(
-        f"✅ <b>Withdrawal complete</b>\n\n"
+    await _reply_economy_photo(
+        update,
+        f"✅ <b>WITHDRAWAL COMPLETE</b>\n\n"
         f"👛 Wallet received: <b>+{amount:,}</b>\n"
         f"👛 Wallet balance: <b>{int(fresh.get('coins', 0)):,}</b>\n"
         f"💎 Total wealth: <b>{int(fresh.get('bank', 0)) + int(fresh.get('coins', 0)):,}</b>",
-        parse_mode="HTML",
+        "withdraw",
         reply_markup=_economy_keyboard(user["telegram_id"]),
     )
 
@@ -910,14 +965,12 @@ async def cmd_bet(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if parts and parts[0].lower() in ("bbet", "bet"):
             args = parts[1:]
     if not args:
-        await update.message.reply_text(
-            "🎰 <b>BINGO BETS</b>\n\n"
-            "Use <code>/bet 100000</code>, <code>bbet 100000</code> or <code>bbet all</code>.\n\n"
-            "🏦 Banked coins are protected and cannot be bet directly.\n"
-            "🎲 Win = your stake returned + equal profit.\n"
-            "💥 Loss = your stake is lost.\n\n"
-            f"👛 Current wallet: <b>{int(user.get('coins', 0) or 0):,}</b>",
-            parse_mode="HTML",
+        await _reply_economy_photo(
+            update,
+            "🎲 <b>BINGO BET</b>\n\n"
+            "Place a 50/50 bet with <code>/bet 100000</code>, <code>bbet 100000</code> or <code>bbet all</code>. A win returns your stake plus equal profit; a loss uses the stake. Only wallet coins can be bet.\n\n"
+            f"👛 Wallet: <b>{int(user.get('coins', 0) or 0):,}</b>",
+            "bbet" if (update.message.text or "").lower().startswith("bbet") else "bet",
             reply_markup=_economy_keyboard(user["telegram_id"]),
         )
         return
@@ -925,46 +978,35 @@ async def cmd_bet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     wallet = int(user.get("coins", 0) or 0)
     amount = wallet if raw.lower() == "all" else _parse_amount_arg(raw)
     if not isinstance(amount, int) or amount <= 0:
-        await update.message.reply_text(
-            "❌ Bet amount must be a positive number or <code>all</code>.",
-            parse_mode="HTML",
-        )
+        await _reply_economy_photo(update, "❌ <b>INVALID BET</b>\n\nEnter a positive amount or use <code>all</code>.", "bbet" if (update.message.text or "").lower().startswith("bbet") else "bet", reply_markup=_economy_keyboard(user["telegram_id"]))
         return
     if amount > wallet:
-        await update.message.reply_text(
-            f"❌ <b>Not enough wallet coins</b>\n\n"
-            f"👛 Wallet: <b>{wallet:,}</b>\n"
-            f"🎲 Requested bet: <b>{amount:,}</b>\n\n"
-            "Tip: use /deposit to protect coins in your bank.",
-            parse_mode="HTML",
-            reply_markup=_economy_keyboard(user["telegram_id"]),
-        )
+        await _reply_economy_photo(update, f"❌ <b>NOT ENOUGH COINS</b>\n\nYour wallet has <b>{wallet:,}</b> coins, but this bet needs <b>{amount:,}</b>. Deposit protected coins only when you want to move them back into your wallet.", "bbet" if (update.message.text or "").lower().startswith("bbet") else "bet", reply_markup=_economy_keyboard(user["telegram_id"]))
         return
     won = await _settle_bet(update.effective_user.id, amount)
     if won is None:
-        await update.message.reply_text(
-            "❌ Bet could not be placed. Your balance may have changed — try again.",
-            reply_markup=_economy_keyboard(user["telegram_id"]),
-        )
+        await _reply_economy_photo(update, "❌ <b>BET NOT PLACED</b>\n\nYour balance changed before the bet could be completed. Refresh your wallet and try again.", "bbet" if (update.message.text or "").lower().startswith("bbet") else "bet", reply_markup=_economy_keyboard(user["telegram_id"]))
         return
     fresh = await db.get_user(update.effective_user.id)
     new_wallet = int(fresh.get("coins", 0) or 0)
     if won:
-        await update.message.reply_text(
+        await _reply_economy_photo(
+            update,
             f"🎉 <b>BET WON</b>\n\n"
             f"🎲 Stake: <b>{amount:,}</b>\n"
             f"💎 Profit: <b>+{amount:,}</b>\n"
             f"💰 Returned: <b>{amount * 2:,}</b>\n\n"
             f"👛 New wallet: <b>{new_wallet:,}</b>",
-            parse_mode="HTML",
+            "bbet" if (update.message.text or "").lower().startswith("bbet") else "bet",
             reply_markup=_economy_keyboard(user["telegram_id"]),
         )
     else:
-        await update.message.reply_text(
+        await _reply_economy_photo(
+            update,
             f"💥 <b>BET LOST</b>\n\n"
             f"🎲 Stake lost: <b>{amount:,}</b>\n\n"
             f"👛 New wallet: <b>{new_wallet:,}</b>",
-            parse_mode="HTML",
+            "bbet" if (update.message.text or "").lower().startswith("bbet") else "bet",
             reply_markup=_economy_keyboard(user["telegram_id"]),
         )
 
@@ -997,41 +1039,44 @@ async def cmd_steal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             args = parts[1:]
     target = await _resolve_target(update, context, args)
     if not target:
-        await update.message.reply_text(
-            "🕵️ <b>STEAL MODE</b>\n\n"
-            "Reply to a player's message with <code>/steal</code>, or use "
-            "<code>/steal @username</code>.\n\n"
-            "The target must have used the bot at least once.",
-            parse_mode="HTML",
+        await _reply_economy_photo(
+            update,
+            "🕵️ <b>STEAL</b>\n\n"
+            "Try your luck by replying to a player with <code>/steal</code> or using <code>/steal @username</code>. The bot chooses the amount from the target's wallet, so every operation is a risk.",
+            "ssteal" if (update.message.text or "").lower().startswith("ssteal") else "steal",
             reply_markup=_economy_keyboard(thief["telegram_id"]),
         )
         return
     thief_id = update.effective_user.id
     target_id = target["telegram_id"]
     if thief_id == target_id:
-        await update.message.reply_text(
-            "❌ You can't steal from yourself!",
+        await _reply_economy_photo(
+            update,
+            "❌ <b>STEAL BLOCKED</b>\n\nYou can't steal from yourself!",
+            "ssteal" if (update.message.text or "").lower().startswith("ssteal") else "steal",
             reply_markup=_economy_keyboard(thief["telegram_id"]),
         )
         return
     allowed, used = await db.consume_steal_attempt(thief_id)
     if not allowed:
-        await update.message.reply_text(
-            "🚫 <b>Daily steal limit reached</b>\n\n"
+        await _reply_economy_photo(
+            update,
+            "🚫 <b>DAILY STEAL LIMIT REACHED</b>\n\n"
             "You have used all <b>10/10</b> attempts for today.\n"
             "Your limit resets at 00:00 UTC.",
-            parse_mode="HTML",
+            "ssteal" if (update.message.text or "").lower().startswith("ssteal") else "steal",
             reply_markup=_economy_keyboard(thief["telegram_id"]),
         )
         return
     target_coins = int(target.get("coins", 0) or 0)
     if target_coins < 1000:
-        await update.message.reply_text(
-            f"🛡️ <b>Steal failed</b>\n\n"
+        await _reply_economy_photo(
+            update,
+            f"🛡️ <b>STEAL FAILED</b>\n\n"
             "The target needs at least <b>1,000</b> wallet coins.\n\n"
             f"🎯 Target wallet: <b>{target_coins:,}</b>\n"
             f"📊 Attempts used: <b>{used}/10</b> today",
-            parse_mode="HTML",
+            "ssteal" if (update.message.text or "").lower().startswith("ssteal") else "steal",
             reply_markup=_economy_keyboard(thief["telegram_id"]),
         )
         return
@@ -1042,24 +1087,28 @@ async def cmd_steal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     amount = random.randint(lower, upper)
     received = amount * 90 // 100
     if received <= 0:
-        await update.message.reply_text(
-            "🛡️ Steal failed — the amount was too small.",
+        await _reply_economy_photo(
+            update,
+            "🛡️ <b>STEAL FAILED</b>\n\nThe calculated amount was too small.",
+            "ssteal" if (update.message.text or "").lower().startswith("ssteal") else "steal",
             reply_markup=_economy_keyboard(thief["telegram_id"]),
         )
         return
     success = await db.perform_steal(thief_id, target_id, amount, received)
     target_name = display_name_from_db(target)
     if not success:
-        await update.message.reply_text(
-            "🛡️ <b>Steal failed</b>\n\n"
+        await _reply_economy_photo(
+            update,
+            "🛡️ <b>STEAL FAILED</b>\n\n"
             "The target's balance changed before the action completed. "
             "Your attempt was still counted.",
-            parse_mode="HTML",
+            "ssteal" if (update.message.text or "").lower().startswith("ssteal") else "steal",
             reply_markup=_economy_keyboard(thief["telegram_id"]),
         )
         return
     thief_name = display_name_from_db(thief)
-    await update.message.reply_text(
+    await _reply_economy_photo(
+        update,
         f"🕵️ <b>STEAL SUCCESSFUL!</b>\n\n"
         f"👤 Thief: <b>{thief_name}</b>\n"
         f"🎯 Target: <b>{target_name}</b>\n"
@@ -1067,7 +1116,7 @@ async def cmd_steal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"💸 10% deduction: <b>{amount - received:,}</b>\n"
         f"💎 You received: <b>{received:,}</b>\n\n"
         f"📊 Steal attempts: <b>{used}/10</b> today",
-        parse_mode="HTML",
+        "ssteal" if (update.message.text or "").lower().startswith("ssteal") else "steal",
         reply_markup=_economy_keyboard(thief["telegram_id"]),
     )
 
@@ -1078,41 +1127,30 @@ async def cmd_give(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Check if user is registered
     sender = await db.get_user(user.id)
     if not sender:
-        await update.message.reply_text("❌ You're not registered yet! Send /start first.")
+        await _reply_economy_photo(update, "❌ <b>WALLET NOT FOUND</b>\n\nPlease send /start first to create your Velocity wallet.", "transfer")
         return
     
     # Parse arguments: /give @username amount or /give user_id amount
     if not context.args or len(context.args) < 2:
-        await update.message.reply_text(
-            "Usage:\n"
-            "/give @username <amount>\n"
-            "/give <user_id> <amount>\n\n"
-            f"Your coins: 💰 <b>{sender['coins']:,}</b>",
-            parse_mode="HTML",
-        )
+        await _reply_economy_photo(update, f"💳 <b>TRANSFER COINS</b>\n\nUse <code>/give @username amount</code> or <code>/give user_id amount</code> to send coins. Your wallet has <b>{sender['coins']:,}</b> coins.", "transfer")
         return
     
     recipient_input = context.args[0]
     try:
         amount = int(context.args[1])
     except ValueError:
-        await update.message.reply_text("❌ Amount must be a number!")
+        await _reply_economy_photo(update, "❌ <b>INVALID AMOUNT</b>\n\nPlease enter the number of coins you want to transfer.", "transfer")
         return
     
     if amount <= 0:
-        await update.message.reply_text("❌ Amount must be greater than 0!")
+        await _reply_economy_photo(update, "❌ <b>INVALID AMOUNT</b>\n\nThe transfer amount must be greater than zero.", "transfer")
         return
     
     # Owners are minting authorities: owner /give never deducts the
     # owner's wallet. Normal members can only give from their own balance.
     is_owner = user.id in OWNER_IDS
     if not is_owner and sender["coins"] < amount:
-        await update.message.reply_text(
-            f"❌ You don't have enough coins!\n"
-            f"You have: 💰 <b>{sender['coins']:,}</b>\n"
-            f"Trying to give: 💰 <b>{amount:,}</b>",
-            parse_mode="HTML",
-        )
+        await _reply_economy_photo(update, f"❌ <b>TRANSFER DECLINED</b>\n\nYour wallet has <b>{sender['coins']:,}</b> coins, but the transfer needs <b>{amount:,}</b>.", "transfer")
         return
     
     # Try to find recipient
@@ -1132,11 +1170,11 @@ async def cmd_give(update: Update, context: ContextTypes.DEFAULT_TYPE):
             recipient = cursor
     
     if not recipient:
-        await update.message.reply_text("❌ Recipient not found! Use @username or user_id")
+        await _reply_economy_photo(update, "❌ <b>PLAYER NOT FOUND</b>\n\nUse a valid <code>@username</code> or Telegram user ID.", "transfer")
         return
     
     if recipient["telegram_id"] == user.id:
-        await update.message.reply_text("❌ You can't give coins to yourself!")
+        await _reply_economy_photo(update, "❌ <b>TRANSFER BLOCKED</b>\n\nYou cannot transfer coins to yourself.", "transfer")
         return
     
     # Transfer coins
@@ -1153,7 +1191,7 @@ async def cmd_give(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     
     if not success:
-        await update.message.reply_text("❌ Transfer failed!")
+        await _reply_economy_photo(update, "❌ <b>TRANSFER FAILED</b>\n\nThe transaction could not be completed. Please refresh your wallet and try again.", "transfer")
         return
     
     recipient_name = display_name_from_db(recipient)
@@ -1172,15 +1210,25 @@ async def cmd_give(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"To: <b>{recipient_name}</b>\n"
             f"💰 Your wallet was deducted by <b>{amount:,}</b>."
         )
-    await update.message.reply_text(result_text, parse_mode="HTML")
+    await _reply_economy_photo(update, result_text, "transfer")
     
     try:
         sender_name = display_name_from_db(sender)
-        await context.bot.send_message(
-            chat_id=recipient["telegram_id"],
-            text=f"🎁 <b>{sender_name}</b> sent you 💰 <b>{amount:,}</b> coins!",
-            parse_mode="HTML",
-        )
+        photo = _economy_photo("transfer")
+        if os.path.exists(photo):
+            with open(photo, "rb") as fh:
+                await context.bot.send_photo(
+                    chat_id=recipient["telegram_id"],
+                    photo=fh,
+                    caption=f"🎁 <b>COINS RECEIVED</b>\n\n<b>{sender_name}</b> sent you 💰 <b>{amount:,}</b> coins!",
+                    parse_mode="HTML",
+                )
+        else:
+            await context.bot.send_message(
+                chat_id=recipient["telegram_id"],
+                text=f"🎁 <b>{sender_name}</b> sent you 💰 <b>{amount:,}</b> coins!",
+                parse_mode="HTML",
+            )
     except (Forbidden, BadRequest):
         pass
 
@@ -1372,7 +1420,9 @@ def main():
     app.add_handler(CommandHandler("cancel_tournament", cmd_cancel_tournament))
     app.add_handler(CommandHandler("give", cmd_give))
     app.add_handler(CommandHandler("balance", cmd_balance))
-    app.add_handler(CommandHandler("bank", cmd_balance))
+    app.add_handler(CommandHandler("bal", cmd_balance))
+    app.add_handler(CommandHandler("coins", cmd_balance))
+    app.add_handler(CommandHandler("bank", cmd_bank))
     app.add_handler(CommandHandler("economy", cmd_economy))
     app.add_handler(CommandHandler("wallet", cmd_economy))
     app.add_handler(CommandHandler("daily", cmd_daily))
