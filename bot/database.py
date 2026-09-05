@@ -32,7 +32,10 @@ def _to_dict(doc) -> Optional[Dict]:
     if doc is None:
         return None
     d = dict(doc)
-    d["id"] = str(d.pop("_id"))
+    if "_id" in d:
+        d["id"] = str(d.pop("_id"))
+    else:
+        d.setdefault("id", str(d.get("telegram_id", "")))
     return d
 
 
@@ -383,71 +386,127 @@ async def get_leaderboard(limit: int = 10) -> List[Dict]:
 async def get_leaderboard_filtered(
     scope: str, chat_id: int, time_filter: str, limit: int = 10
 ) -> List[Dict]:
-    """Economy-aware leaderboard.
+    """Economy-aware leaderboard that preserves historical game data.
 
-    All-time rankings use each player's live wallet + bank wealth.  Period
-    rankings use net Bingo Coin movement recorded in economy_logs, so bets,
-    wins, steals, transfers, deposits/withdrawals and rewards update the
-    ranking automatically.  Chat rankings only include activity recorded in
-    that chat; global rankings include activity everywhere.
+    All-time rankings use live wallet + bank wealth. Period rankings combine
+    historical game_results with economy logs, while excluding the duplicated
+    game event types from economy_logs. This means older Bingo games remain
+    visible even if they happened before the economy logging system existed.
     """
-    if time_filter == "all_time" and scope == "global":
-        return await get_leaderboard(limit)
+    if time_filter == "all_time":
+        if scope == "global":
+            return await get_leaderboard(limit)
 
-    if time_filter == "all_time" and scope == "chat" and chat_id:
-        # Find everyone who has ever generated economy/game activity in this chat,
-        # then rank them by their current total wealth.
-        pipeline = [
-            {"$match": {"chat_id": chat_id}},
-            {"$group": {"_id": "$telegram_id"}},
-            {"$lookup": {"from": "users", "localField": "_id", "foreignField": "telegram_id", "as": "user_doc"}},
-            {"$unwind": "$user_doc"},
-            {"$addFields": {"total_coins": {"$add": [
-                {"$ifNull": ["$user_doc.coins", 0]},
-                {"$ifNull": ["$user_doc.bank", 0]},
-            ]}}},
-            {"$project": {
-                "_id": 0,
-                "telegram_id": "$_id",
-                "username": "$user_doc.username",
-                "first_name": "$user_doc.first_name",
-                "games_played": "$user_doc.games_played",
-                "wins": "$user_doc.wins",
-                "coins": "$total_coins",
-            }},
-            {"$sort": {"coins": -1, "wins": -1}},
-            {"$limit": limit},
-        ]
-        docs = await _col("economy_logs").aggregate(pipeline).to_list(length=limit)
-        return [_to_dict(d) for d in docs]
+        if scope == "chat" and chat_id:
+            # Include players who participated in either old Bingo games or
+            # newer economy activity in this chat.
+            pipeline = [
+                {"$facet": {
+                    "games": [{"$match": {"chat_id": chat_id}}, {"$group": {"_id": "$telegram_id"}}],
+                    "economy": [{"$match": {"chat_id": chat_id}}, {"$group": {"_id": "$telegram_id"}}],
+                }},
+                {"$project": {"ids": {"$setUnion": ["$games._id", "$economy._id"]}}},
+                {"$unwind": "$ids"},
+                {"$lookup": {"from": "users", "localField": "ids", "foreignField": "telegram_id", "as": "user_doc"}},
+                {"$unwind": "$user_doc"},
+                {"$addFields": {"total_coins": {"$add": [
+                    {"$ifNull": ["$user_doc.coins", 0]},
+                    {"$ifNull": ["$user_doc.bank", 0]},
+                ]}}},
+                {"$project": {
+                    "_id": 0, "telegram_id": "$ids",
+                    "username": "$user_doc.username", "first_name": "$user_doc.first_name",
+                    "games_played": "$user_doc.games_played", "wins": "$user_doc.wins",
+                    "losses": "$user_doc.losses", "current_streak": "$user_doc.current_streak",
+                    "longest_streak": "$user_doc.longest_streak", "coins": "$total_coins",
+                }},
+                {"$sort": {"coins": -1, "wins": -1}},
+                {"$limit": limit},
+            ]
+            docs = await _col("economy_logs").aggregate(pipeline).to_list(length=limit)
+            return [_to_dict(d) for d in docs]
 
     start = _time_filter_start(time_filter)
-    match: Dict = {}
+    game_match: Dict = {}
+    economy_match: Dict = {"event": {"$nin": ["game_win", "game_adjustment"]}}
     if start:
-        match["created_at"] = {"$gte": start}
+        game_match["created_at"] = {"$gte": start}
+        economy_match["created_at"] = {"$gte": start}
     if scope == "chat" and chat_id:
-        match["chat_id"] = chat_id
+        game_match["chat_id"] = chat_id
+        economy_match["chat_id"] = chat_id
 
+    # Use both collections so historical Bingo results remain part of period
+    # rankings. Game events are excluded from economy_logs because game_results
+    # already records their coin delta, preventing double counting.
     pipeline = [
-        {"$match": match},
-        {"$group": {"_id": "$telegram_id", "coins": {"$sum": {"$ifNull": ["$amount", 0]}}, "activity": {"$sum": 1}}},
+        {"$facet": {
+            "games": [
+                {"$match": game_match},
+                {"$group": {"_id": "$telegram_id", "coins": {"$sum": {"$ifNull": ["$coins", 0]}}, "activity": {"$sum": 1}}},
+            ],
+            "economy": [
+                {"$match": economy_match},
+                {"$group": {"_id": "$telegram_id", "coins": {"$sum": {"$ifNull": ["$amount", 0]}}, "activity": {"$sum": 1}}},
+            ],
+        }},
+        {"$project": {"rows": {"$concatArrays": ["$games", "$economy"]}}},
+        {"$unwind": "$rows"},
+        {"$group": {
+            "_id": "$rows._id",
+            "coins": {"$sum": "$rows.coins"},
+            "activity": {"$sum": "$rows.activity"},
+        }},
         {"$lookup": {"from": "users", "localField": "_id", "foreignField": "telegram_id", "as": "user_doc"}},
         {"$unwind": "$user_doc"},
         {"$project": {
-            "_id": 0,
-            "telegram_id": "$_id",
-            "username": "$user_doc.username",
-            "first_name": "$user_doc.first_name",
-            "games_played": "$user_doc.games_played",
-            "wins": "$user_doc.wins",
-            "activity": 1,
-            "coins": 1,
+            "_id": 0, "telegram_id": "$_id",
+            "username": "$user_doc.username", "first_name": "$user_doc.first_name",
+            "games_played": "$user_doc.games_played", "wins": "$user_doc.wins",
+            "losses": "$user_doc.losses", "current_streak": "$user_doc.current_streak",
+            "longest_streak": "$user_doc.longest_streak",
+            "activity": 1, "coins": 1,
         }},
         {"$sort": {"coins": -1, "activity": -1}},
         {"$limit": limit},
     ]
-    docs = await _col("economy_logs").aggregate(pipeline).to_list(length=limit)
-    return [_to_dict(d) for d in docs]
+    # Aggregate on economy_logs only as the anchor collection; MongoDB cannot
+    # run a $facet across two collections. Build the same result with a small
+    # number of queries in Python, which is safer and preserves existing data.
+    game_docs = await _col("game_results").aggregate([
+        {"$match": game_match},
+        {"$group": {"_id": "$telegram_id", "coins": {"$sum": {"$ifNull": ["$coins", 0]}}, "activity": {"$sum": 1}}},
+    ]).to_list(length=None)
+    economy_docs = await _col("economy_logs").aggregate([
+        {"$match": economy_match},
+        {"$group": {"_id": "$telegram_id", "coins": {"$sum": {"$ifNull": ["$amount", 0]}}, "activity": {"$sum": 1}}},
+    ]).to_list(length=None)
+    totals: Dict[int, Dict[str, int]] = {}
+    for row in game_docs + economy_docs:
+        uid = row.get("_id")
+        if uid is None:
+            continue
+        item = totals.setdefault(uid, {"coins": 0, "activity": 0})
+        item["coins"] += int(row.get("coins", 0) or 0)
+        item["activity"] += int(row.get("activity", 0) or 0)
+    if not totals:
+        return []
+    user_docs = await _col("users").find({"telegram_id": {"$in": list(totals)}}).to_list(length=None)
+    users = {d.get("telegram_id"): d for d in user_docs}
+    rows = []
+    for uid, stats in totals.items():
+        u = users.get(uid)
+        if not u:
+            continue
+        rows.append({
+            "telegram_id": uid, "username": u.get("username"), "first_name": u.get("first_name"),
+            "games_played": u.get("games_played", 0), "wins": u.get("wins", 0),
+            "losses": u.get("losses", 0), "current_streak": u.get("current_streak", 0),
+            "longest_streak": u.get("longest_streak", 0),
+            "activity": stats["activity"], "coins": stats["coins"],
+        })
+    rows.sort(key=lambda r: (r["coins"], r["activity"]), reverse=True)
+    return rows[:limit]
 
 
 async def update_user_stats(telegram_id: int, won: bool, coins_delta: int, chat_id: int = 0):
