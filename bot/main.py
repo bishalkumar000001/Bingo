@@ -551,7 +551,7 @@ def _coin_bar(value: int, total: int, width: int = 12) -> str:
     return "▰" * filled + "▱" * (width - filled)
 
 
-BUY_COINS_URL = os.environ.get("BUY_COINS_URL", "").strip()
+BUY_COINS_URL = os.environ.get("BUY_COINS_URL", "https://bingos-9b203c93cae2.herokuapp.com/").strip()
 
 def _economy_keyboard(user_id: int):
     """Show only a Buy Coins link; all other economy actions remain manual commands."""
