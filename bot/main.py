@@ -551,30 +551,15 @@ def _coin_bar(value: int, total: int, width: int = 12) -> str:
     return "▰" * filled + "▱" * (width - filled)
 
 
-def _economy_keyboard(user_id: int) -> InlineKeyboardMarkup:
-    """Quick actions for the player's private coin dashboard."""
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🏦 Deposit 25%", callback_data=f"eco:deposit:25:{user_id}"),
-            InlineKeyboardButton("🏦 Deposit All", callback_data=f"eco:deposit:all:{user_id}"),
-        ],
-        [
-            InlineKeyboardButton("💸 Withdraw 25%", callback_data=f"eco:withdraw:25:{user_id}"),
-            InlineKeyboardButton("💸 Withdraw All", callback_data=f"eco:withdraw:all:{user_id}"),
-        ],
-        [
-            InlineKeyboardButton("🎲 Quick Bet 25%", callback_data=f"eco:bet:25:{user_id}"),
-            InlineKeyboardButton("🎲 Quick Bet 50%", callback_data=f"eco:bet:50:{user_id}"),
-        ],
-        [
-            InlineKeyboardButton("🕵️ Steal Guide", callback_data=f"eco:steal_help:0:{user_id}"),
-            InlineKeyboardButton("🔄 Refresh", callback_data=f"eco:refresh:0:{user_id}"),
-        ],
-        [
-            InlineKeyboardButton("🎁 Daily Reward", callback_data=f"eco:daily:0:{user_id}"),
-            InlineKeyboardButton("🧾 History", callback_data=f"eco:history:0:{user_id}"),
-        ],
-    ])
+BUY_COINS_URL = os.environ.get("BUY_COINS_URL", "").strip()
+
+def _economy_keyboard(user_id: int):
+    """Show only a Buy Coins link; all other economy actions remain manual commands."""
+    if BUY_COINS_URL.startswith(("https://", "http://")):
+        return InlineKeyboardMarkup([[
+            InlineKeyboardButton("🪙 Buy Coins", url=BUY_COINS_URL)
+        ]])
+    return None
 
 
 def _economy_text(player: dict) -> str:
