@@ -25,11 +25,10 @@ PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://bingos-9b203c93cae2
 
 # Default packages; edit these values to change the store's offer/pricing.
 COIN_PACKAGES = {
-    "starter": {"name": "Starter", "coins": 1000, "stars": 25, "description": "A little boost for your Bingo wallet."},
-    "popular": {"name": "Popular", "coins": 3500, "stars": 75, "description": "More coins for your next games."},
-    "premium": {"name": "Premium", "coins": 8000, "stars": 150, "description": "A bigger coin bundle."},
-    "pro": {"name": "Pro", "coins": 30000, "stars": 500, "description": "For regular players."},
-    "mega": {"name": "Mega", "coins": 100000, "stars": 1200, "description": "The largest coin bundle."},
+    "coins_10000": {"name": "Starter", "coins": 10000, "stars": 29, "description": "A little boost for your Bingo wallet."},
+    "coins_50000": {"name": "Standard", "coins": 50000, "stars": 59, "description": "More coins for your next games."},
+    "coins_200000": {"name": "Premium", "coins": 200000, "stars": 119, "description": "A bigger coin bundle."},
+    "coins_500000": {"name": "Mega", "coins": 500000, "stars": 199, "description": "The largest coin bundle."},
 }
 
 PAGE = r'''<!doctype html>
@@ -47,11 +46,10 @@ PAGE = r'''<!doctype html>
 <div class="notice">Sign in with Telegram to connect a purchase to your Bingo wallet. Payments are processed through Telegram Stars. Coins are virtual game credits and cannot be withdrawn or exchanged for cash.</div>
 <div class="login" id="login-area"></div><div id="status" role="status">Sign in with Telegram to purchase coins.</div>
 <section class="grid" id="packages">
-<div class="pkg"><div class="tag">Starter</div><h2>Starter</h2><div class="coins">1,000</div><div class="coin-label">Bingo coins</div><div class="price">⭐ 25 Stars</div><button disabled>Buy coins</button></div>
-<div class="pkg popular"><div class="tag">Popular</div><h2>Popular</h2><div class="coins">3,500</div><div class="coin-label">Bingo coins</div><div class="price">⭐ 75 Stars</div><button disabled>Buy coins</button></div>
-<div class="pkg"><div class="tag">Premium</div><h2>Premium</h2><div class="coins">8,000</div><div class="coin-label">Bingo coins</div><div class="price">⭐ 150 Stars</div><button disabled>Buy coins</button></div>
-<div class="pkg"><div class="tag">Pro</div><h2>Pro</h2><div class="coins">30,000</div><div class="coin-label">Bingo coins</div><div class="price">⭐ 500 Stars</div><button disabled>Buy coins</button></div>
-<div class="pkg"><div class="tag">Mega</div><h2>Mega</h2><div class="coins">100,000</div><div class="coin-label">Bingo coins</div><div class="price">⭐ 1,200 Stars</div><button disabled>Buy coins</button></div>
+<div class="pkg"><div class="tag">Starter</div><h2>Starter</h2><div class="coins">10,000</div><div class="coin-label">Bingo coins</div><div class="price">⭐ 29 Stars</div><button disabled>Buy coins</button></div>
+<div class="pkg popular"><div class="tag">Standard</div><h2>Standard</h2><div class="coins">50,000</div><div class="coin-label">Bingo coins</div><div class="price">⭐ 59 Stars</div><button disabled>Buy coins</button></div>
+<div class="pkg"><div class="tag">Premium</div><h2>Premium</h2><div class="coins">200,000</div><div class="coin-label">Bingo coins</div><div class="price">⭐ 119 Stars</div><button disabled>Buy coins</button></div>
+<div class="pkg"><div class="tag">Mega</div><h2>Mega</h2><div class="coins">500,000</div><div class="coin-label">Bingo coins</div><div class="price">⭐ 199 Stars</div><button disabled>Buy coins</button></div>
 </section>
 <div class="foot">Secure payment confirmation · Automatic wallet credit · Payment records protected against duplicate credit</div>
 <div class="legal">Purchases are subject to Telegram Stars terms and applicable local requirements. For payment support, contact the bot owner using the support channel configured for Velocity Bingo.</div>
@@ -81,7 +79,7 @@ async function buy(packageId, button){
     window.location.href=data.invoice_url;
   }catch(e){setStatus(e.message||'Something went wrong. Please try again.');button.disabled=false;}
 }
-const ids=['starter','popular','premium','pro','mega'];
+const ids=['coins_10000','coins_50000','coins_200000','coins_500000'];
 document.querySelectorAll('#packages .pkg button').forEach((button,i)=>button.addEventListener('click',()=>buy(ids[i],button)));
 if(!BOT_USERNAME){setStatus('Store setup is incomplete: configure TELEGRAM_BOT_USERNAME on your hosting dashboard.');}
 else{

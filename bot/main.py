@@ -1389,11 +1389,10 @@ async def handle_successful_payment(update: Update, context: ContextTypes.DEFAUL
         target_user_id = int(parts[1])
         package_id = parts[2]
         package = {
-            "starter": {"coins": 1000, "stars": 25},
-            "popular": {"coins": 3500, "stars": 75},
-            "premium": {"coins": 8000, "stars": 150},
-            "pro": {"coins": 30000, "stars": 500},
-            "mega": {"coins": 100000, "stars": 1200},
+            "coins_10000": {"coins": 10000, "stars": 29},
+            "coins_50000": {"coins": 50000, "stars": 59},
+            "coins_200000": {"coins": 200000, "stars": 119},
+            "coins_500000": {"coins": 500000, "stars": 199},
         }.get(package_id)
         if not package or int(payment.total_amount) != package["stars"]:
             logger.warning("Rejected mismatched Stars payment payload/amount from user %s", payer.id)
