@@ -16,7 +16,6 @@ from telegram.ext import (
     filters,
 )
 from telegram.error import BadRequest, Forbidden
-from webserver import start_webserver
 
 import database as db
 from rooms import cmd_bingo, handle_join_callback, handle_cancel_room_callback, cmd_stopbingo
@@ -551,15 +550,17 @@ def _coin_bar(value: int, total: int, width: int = 12) -> str:
     return "▰" * filled + "▱" * (width - filled)
 
 
-BUY_COINS_URL = os.environ.get("BUY_COINS_URL", "https://bingos-9b203c93cae2.herokuapp.com/").strip()
-
-def _economy_keyboard(user_id: int):
-    """Show only a Buy Coins link; all other economy actions remain manual commands."""
-    if BUY_COINS_URL.startswith(("https://", "http://")):
-        return InlineKeyboardMarkup([[
-            InlineKeyboardButton("🪙 Buy Coins", url=BUY_COINS_URL)
-        ]])
-    return None
+def _economy_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    """Keep the economy panel minimal: one link to the coin store."""
+    buy_coins_url = os.environ.get(
+        "BUY_COINS_URL",
+        os.environ.get("PUBLIC_BASE_URL", "https://bingos-9b203c93cae2.herokuapp.com/"),
+    ).strip()
+    if not buy_coins_url:
+        buy_coins_url = "https://bingos-9b203c93cae2.herokuapp.com/"
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🪙 Buy Coins", url=buy_coins_url)],
+    ])
 
 
 def _economy_text(player: dict) -> str:
@@ -1371,6 +1372,68 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
 
 
+async def handle_successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Credit virtual coins only from a verified Telegram Stars payment update."""
+    message = update.effective_message
+    payer = update.effective_user
+    payment = getattr(message, "successful_payment", None) if message else None
+    if not payment or not payer:
+        return
+    try:
+        if payment.currency != "XTR":
+            await message.reply_text("Payment received in an unsupported currency. Please contact support.")
+            return
+        parts = str(payment.invoice_payload).split(":")
+        if len(parts) != 4 or parts[0] != "vbcoins":
+            return
+        target_user_id = int(parts[1])
+        package_id = parts[2]
+        package = {
+            "starter": {"coins": 1000, "stars": 25},
+            "popular": {"coins": 3500, "stars": 75},
+            "premium": {"coins": 8000, "stars": 150},
+            "pro": {"coins": 30000, "stars": 500},
+            "mega": {"coins": 100000, "stars": 1200},
+        }.get(package_id)
+        if not package or int(payment.total_amount) != package["stars"]:
+            logger.warning("Rejected mismatched Stars payment payload/amount from user %s", payer.id)
+            await message.reply_text("We could not match this payment to a coin package. Please contact support.")
+            return
+        credited = await db.credit_star_purchase(
+            target_user_id,
+            package["coins"],
+            payment.telegram_payment_charge_id,
+            payment.invoice_payload,
+            int(payment.total_amount),
+            payment.currency,
+        )
+        if credited:
+            player = await db.get_user(target_user_id)
+            balance = int((player or {}).get("coins", 0) or 0)
+            await message.reply_text(
+                "✅ <b>PAYMENT CONFIRMED</b>\n\n"
+                f"🪙 <b>{package['coins']:,} coins</b> credited to Bingo user <code>{target_user_id}</code>.\n"
+                f"👛 Current wallet balance: <b>{balance:,} coins</b>\n\n"
+                "These are virtual game coins and cannot be withdrawn for cash.",
+                parse_mode="HTML",
+            )
+            if target_user_id != payer.id:
+                try:
+                    await context.bot.send_message(
+                        chat_id=target_user_id,
+                        text=f"🪙 Your Bingo wallet has been credited with {package['coins']:,} coins from a Telegram Stars purchase. Use /balance to check your wallet.",
+                    )
+                except Exception:
+                    pass
+        else:
+            # Duplicate charge IDs are intentionally ignored by the database layer.
+            logger.info("Ignored duplicate or uncreditable Stars charge %s", payment.telegram_payment_charge_id)
+            await message.reply_text("This payment was already processed or the Bingo wallet could not be found. If your coins are missing, contact support with this payment receipt.")
+    except Exception:
+        logger.exception("Failed to process successful Telegram Stars payment")
+        await message.reply_text("Telegram confirmed your payment, but coin delivery needs a support check. Please keep this receipt and contact support.")
+
+
 async def post_init(application: Application):
     for attempt in range(1, 6):
         try:
@@ -1414,6 +1477,7 @@ def main():
         .build()
     )
 
+    app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, handle_successful_payment))
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("bingo", cmd_bingo))
@@ -1458,5 +1522,4 @@ def main():
 
 
 if __name__ == "__main__":
-    start_webserver()
     main()

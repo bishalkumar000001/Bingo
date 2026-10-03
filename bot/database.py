@@ -66,6 +66,8 @@ async def init_db():
     await db["chats"].create_index("chat_id", unique=True)
     await db["economy_logs"].create_index([("telegram_id", 1), ("created_at", -1)])
     await db["economy_logs"].create_index([("created_at", -1)])
+    await db["star_payments"].create_index("telegram_payment_charge_id", unique=True)
+    await db["star_payments"].create_index([("telegram_id", 1), ("created_at", -1)])
 
 
 async def get_user(telegram_id: int) -> Optional[Dict]:
@@ -124,6 +126,54 @@ async def record_economy_event(
     except Exception:
         # A history write must never undo or hide a successful balance update.
         pass
+
+
+async def credit_star_purchase(
+    telegram_id: int,
+    coins: int,
+    charge_id: str,
+    invoice_payload: str,
+    total_amount: int,
+    currency: str,
+) -> bool:
+    """Atomically credit a Stars purchase once per Telegram charge ID."""
+    if coins <= 0 or not charge_id or currency != "XTR":
+        return False
+    now = datetime.now(timezone.utc)
+    updated = await _col("users").find_one_and_update(
+        {
+            "telegram_id": telegram_id,
+            "processed_star_charges": {"$ne": charge_id},
+        },
+        {
+            "$inc": {"coins": int(coins)},
+            "$addToSet": {"processed_star_charges": charge_id},
+        },
+        return_document=ReturnDocument.AFTER,
+    )
+    if not updated:
+        return False
+    await record_economy_event(
+        telegram_id,
+        "star_purchase",
+        int(coins),
+        wallet_delta=int(coins),
+    )
+    try:
+        await _col("star_payments").insert_one({
+            "telegram_id": telegram_id,
+            "coins": int(coins),
+            "stars": int(total_amount),
+            "currency": currency,
+            "telegram_payment_charge_id": charge_id,
+            "invoice_payload": invoice_payload,
+            "created_at": now,
+            "status": "credited",
+        })
+    except Exception:
+        # The user document's processed_star_charges field is the idempotency guard.
+        pass
+    return True
 
 
 async def get_economy_history(telegram_id: int, limit: int = 10) -> List[Dict]:
