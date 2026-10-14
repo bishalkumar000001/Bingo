@@ -1529,6 +1529,9 @@ async def post_init(application: Application):
         try:
             await db.init_db()
             logger.info("Database initialized.")
+            # Start the automatic hourly and daily jackpot event loop.
+            application.create_task(_economy_event_scheduler(application))
+            logger.info("Economy event scheduler started.")
             return
         except Exception:
             logger.exception("Database initialization failed (attempt %s/5)", attempt)
