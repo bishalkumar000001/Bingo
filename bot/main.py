@@ -4,7 +4,7 @@ import logging
 import random
 import re
 from html import escape
-from datetime import timezone
+from datetime import timezone, datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.ext import (
     Application,
@@ -1433,6 +1433,97 @@ async def handle_successful_payment(update: Update, context: ContextTypes.DEFAUL
         await message.reply_text("Telegram confirmed your payment, but coin delivery needs a support check. Please keep this receipt and contact support.")
 
 
+
+
+async def cmd_guess(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Guess the secret three-digit number in the current economy event."""
+    user = update.effective_user
+    if not user:
+        return
+    await db.create_user(user.id, user.username or "", user.first_name or "")
+    if not context.args or not context.args[0].isdigit() or not (100 <= int(context.args[0]) <= 999):
+        await update.effective_message.reply_text("🎯 Guess a 3-digit number from 100 to 999.\nExample: /g 389")
+        return
+    guess = int(context.args[0])
+    event = await db.get_active_number_event()
+    if not event:
+        await update.effective_message.reply_text("⏳ There isn't an active number event right now. Watch for the next automatic Bingo Coin drop!")
+        return
+    if guess != int(event["secret"]):
+        await update.effective_message.reply_text("❌ Not the number! Try another guess before the event ends.")
+        return
+    won = await db.claim_number_event(event["_id"], user.id, guess, update.effective_chat.id if update.effective_chat else 0)
+    if not won:
+        await update.effective_message.reply_text("😅 Someone may have claimed it first. Check the next event!")
+        return
+    await update.effective_message.reply_text(
+        f"🎉 <b>JACKPOT CLAIMED!</b>\n\n🏆 {escape(user.first_name or 'Player')} guessed <b>{guess}</b> first!\n💰 Prize: <b>+{int(won['prize']):,} Bingo Coins</b>\n\n👑 Congratulations!",
+        parse_mode="HTML",
+    )
+
+
+async def _broadcast_number_event(application: Application, event: dict):
+    prize = int(event["prize"])
+    if event["kind"] == "daily_special":
+        title = "🌟 <b>DAILY MEGA JACKPOT</b>"
+        note = "Only one winner for this special event today!"
+    else:
+        title = "📦 <b>HOURLY BINGO COIN DROP</b>"
+        note = "A new automatic event drops every hour. Win up to 2,000 coins!"
+    text = (
+        f"{title}\n\n"
+        "Guess the secret 3-digit number to win Bingo Coins.\n\n"
+        f"💰 Prize: <b>{prize:,} Bingo Coins</b>\n"
+        "🎯 Range: <code>100 — 999</code>\n"
+        "🎮 Guess using: <code>/g &lt;number&gt;</code>\n"
+        "⏳ Time limit: <b>60 minutes</b>\n\n"
+        f"<i>{note}</i>\n\n"
+        "🏁 First person to guess correctly wins!"
+    )
+    for chat_id in await db.get_all_group_chat_ids():
+        try:
+            await application.bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
+        except Exception as exc:
+            logger.warning("Could not post economy event to chat %s: %s", chat_id, exc)
+
+
+async def _economy_event_scheduler(application: Application):
+    """Hourly drops and one daily special; event records are persisted in MongoDB."""
+    while True:
+        now = datetime.now(timezone.utc)
+        hour_key = now.strftime("%Y%m%d%H")
+        hourly_id = f"hourly:{hour_key}"
+        hourly = await db.start_number_event(
+            hourly_id, random.randint(500, 2000), "hourly",
+            random.randint(100, 999), now + timedelta(minutes=60),
+        )
+        # Only broadcast if this event was created for the first time.
+        created_at = hourly.get("created_at") if hourly else None
+        if created_at and created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        if hourly and created_at and (now - created_at).total_seconds() < 8:
+            await _broadcast_number_event(application, hourly)
+
+        day_key = now.strftime("%Y%m%d")
+        daily_id = f"daily-special:{day_key}"
+        # Random daily launch time, deterministic for this date so restarts don't reroll it.
+        import hashlib
+        launch_minute = int(hashlib.sha256(day_key.encode()).hexdigest()[:8], 16) % 1440
+        launch_at = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(minutes=launch_minute)
+        daily_doc = await db._col("number_events").find_one({"_id": daily_id})
+        if now >= launch_at and not daily_doc:
+            special = await db.start_number_event(
+                daily_id, 10000, "daily_special", random.randint(100, 999),
+                now + timedelta(minutes=60),
+            )
+            if special:
+                await _broadcast_number_event(application, special)
+        # Sleep until the next UTC hour, checking daily launch without tight polling.
+        now = datetime.now(timezone.utc)
+        next_hour = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+        await asyncio.sleep(max(30, min(300, (next_hour - now).total_seconds())))
+
+
 async def post_init(application: Application):
     for attempt in range(1, 6):
         try:
@@ -1502,6 +1593,8 @@ def main():
     app.add_handler(CommandHandler("economy", cmd_economy))
     app.add_handler(CommandHandler("wallet", cmd_economy))
     app.add_handler(CommandHandler("daily", cmd_daily))
+    app.add_handler(CommandHandler("g", cmd_guess))
+    app.add_handler(CommandHandler("guess", cmd_guess))
     app.add_handler(CommandHandler("transactions", cmd_transactions))
     app.add_handler(CommandHandler("history", cmd_transactions))
     app.add_handler(CommandHandler("deposit", cmd_deposit))
