@@ -1449,8 +1449,13 @@ async def cmd_guess(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not event:
         await update.effective_message.reply_text("⏳ There isn't an active number event right now. Watch for the next automatic Bingo Coin drop!")
         return
-    if guess != int(event["secret"]):
-        await update.effective_message.reply_text("❌ Not the number! Try another guess before the event ends.")
+    secret = int(event["secret"])
+    if guess != secret:
+        hint = "⬆️ HIGHER! Try a bigger number." if guess < secret else "⬇️ LOWER! Try a smaller number."
+        await update.effective_message.reply_text(
+            f"❌ <b>{guess}</b> is not correct.\n\n{hint}\n🎯 Keep guessing before the event ends!",
+            parse_mode="HTML",
+        )
         return
     won = await db.claim_number_event(event["_id"], user.id, guess, update.effective_chat.id if update.effective_chat else 0)
     if not won:
