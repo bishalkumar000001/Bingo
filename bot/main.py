@@ -1488,7 +1488,16 @@ async def _broadcast_number_event(application: Application, event: dict):
     chat_id = int(event.get("group_id", 0) or 0)
     if chat_id:
         try:
-            await application.bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
+            msg = await application.bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
+            # Persist the announcement message so the scheduler can remove it
+            # one hour after posting, even if the worker restarts.
+            await db._col("number_events").update_one(
+                {"_id": event["_id"]},
+                {"$set": {"announcement_message_id": int(msg.message_id),
+                          "announcement_chat_id": int(chat_id),
+                          "announcement_delete_at": datetime.now(timezone.utc) + timedelta(hours=1),
+                          "announcement_deleted": False}},
+            )
         except Exception as exc:
             logger.warning("Could not post economy event to chat %s: %s", chat_id, exc)
 
@@ -1507,7 +1516,7 @@ async def _economy_event_scheduler(application: Application):
                 event_id = f"six-hour:{chat_id}:{slot}"
                 event = await db.start_number_event(
                     event_id, 5000, "six_hour", random.randint(100, 999),
-                    slot_start + timedelta(hours=6), group_id=int(chat_id),
+                    now + timedelta(hours=1), group_id=int(chat_id),
                 )
                 created_at = event.get("created_at") if event else None
                 if created_at and created_at.tzinfo is None:
@@ -1530,7 +1539,30 @@ async def _economy_event_scheduler(application: Application):
                         await _broadcast_number_event(application, special)
             except Exception:
                 logger.exception("Failed to schedule economy events for group %s", chat_id)
-        # Check every 30 seconds so each group's randomized daily launch is timely.
+        # Delete each event announcement one hour after it was posted. Keep this
+        # persistent in MongoDB so it still happens after a worker restart.
+        try:
+            expired_announcements = await db._col("number_events").find({
+                "announcement_message_id": {"$exists": True},
+                "announcement_deleted": {"$ne": True},
+                "announcement_delete_at": {"$lte": datetime.now(timezone.utc)},
+            }).to_list(length=500)
+            for old_event in expired_announcements:
+                try:
+                    await application.bot.delete_message(
+                        chat_id=int(old_event.get("announcement_chat_id", old_event.get("group_id", 0))),
+                        message_id=int(old_event["announcement_message_id"]),
+                    )
+                except Exception as exc:
+                    logger.info("Could not delete expired event message %s: %s", old_event.get("_id"), exc)
+                finally:
+                    await db._col("number_events").update_one(
+                        {"_id": old_event["_id"]},
+                        {"$set": {"announcement_deleted": True}},
+                    )
+        except Exception:
+            logger.exception("Failed to clean up expired economy event messages")
+        # Check every 30 seconds so randomized daily launch and message cleanup are timely.
         await asyncio.sleep(30)
 
 async def post_init(application: Application):
