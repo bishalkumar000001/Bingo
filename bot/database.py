@@ -1131,14 +1131,14 @@ async def cancel_tournament(tournament_id: str) -> Dict:
     return {"status": "cancelled", "refunds": refunds, "players": len(entries)}
 
 
-# Automated number-guessing economy events (shared across bot restarts).
-async def start_number_event(event_id: str, prize: int, kind: str, secret: int, ends_at):
-    """Create/replace an event; event_id is unique per hour or UTC day."""
+# Automated per-group number-guessing economy events.
+async def start_number_event(event_id: str, prize: int, kind: str, secret: int, ends_at, group_id: int = 0):
+    """Create a persistent event scoped to one group."""
     now = datetime.now(timezone.utc)
-    result = await _col("number_events").update_one(
+    await _col("number_events").update_one(
         {"_id": event_id},
         {"$setOnInsert": {
-            "event_id": event_id, "prize": int(prize), "kind": kind,
+            "event_id": event_id, "group_id": int(group_id), "prize": int(prize), "kind": kind,
             "secret": int(secret), "status": "active", "winner_id": None,
             "created_at": now, "ends_at": ends_at,
         }},
@@ -1147,34 +1147,31 @@ async def start_number_event(event_id: str, prize: int, kind: str, secret: int, 
     return await _col("number_events").find_one({"_id": event_id})
 
 
-async def get_active_number_event(kind: Optional[str] = None):
-    query = {"status": "active", "ends_at": {"$gt": datetime.now(timezone.utc)}}
+async def get_active_number_event(kind: Optional[str] = None, group_id: int = 0):
+    query = {"status": "active", "ends_at": {"$gt": datetime.now(timezone.utc)}, "group_id": int(group_id)}
     if kind:
         query["kind"] = kind
         return await _col("number_events").find_one(query, sort=[("created_at", -1)])
-    # The 10,000-coin daily jackpot takes priority while it is active.
     daily = await _col("number_events").find_one({**query, "kind": "daily_special"})
     if daily:
         return daily
-    return await _col("number_events").find_one({**query, "kind": "hourly"}, sort=[("created_at", -1)])
+    return await _col("number_events").find_one({**query, "kind": "six_hour"}, sort=[("created_at", -1)])
 
 
 async def claim_number_event(event_id: str, user_id: int, guess: int, chat_id: int = 0):
-    """Atomically award the first correct guess for an event."""
+    """Atomically award the first correct guess for a group's event."""
     event = await _col("number_events").find_one_and_update(
         {"_id": event_id, "status": "active", "secret": int(guess),
-         "ends_at": {"$gt": datetime.now(timezone.utc)}},
-        {"$set": {"status": "won", "winner_id": int(user_id),
-                  "won_at": datetime.now(timezone.utc)}},
+         "ends_at": {"$gt": datetime.now(timezone.utc)}, "group_id": int(chat_id)},
+        {"$set": {"status": "won", "winner_id": int(user_id), "won_at": datetime.now(timezone.utc)}},
         return_document=ReturnDocument.AFTER,
     )
     if not event:
         return None
     updated = await _col("users").update_one(
-        {"telegram_id": int(user_id)}, {"$inc": {"coins": int(event["prize"])}}
+        {"telegram_id": int(user_id)}, {"$inc": {"coins": int(event["prize"])} }
     )
     if not updated.modified_count:
-        # Revert the claim if user does not have a wallet.
         await _col("number_events").update_one(
             {"_id": event_id, "winner_id": int(user_id)},
             {"$set": {"status": "active", "winner_id": None}, "$unset": {"won_at": ""}},

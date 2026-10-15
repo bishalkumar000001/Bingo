@@ -1445,7 +1445,7 @@ async def cmd_guess(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.effective_message.reply_text("🎯 Guess a 3-digit number from 100 to 999.\nExample: /g 389")
         return
     guess = int(context.args[0])
-    event = await db.get_active_number_event()
+    event = await db.get_active_number_event(group_id=update.effective_chat.id if update.effective_chat else 0)
     if not event:
         await update.effective_message.reply_text("⏳ There isn't an active number event right now. Watch for the next automatic Bingo Coin drop!")
         return
@@ -1471,10 +1471,10 @@ async def _broadcast_number_event(application: Application, event: dict):
     prize = int(event["prize"])
     if event["kind"] == "daily_special":
         title = "🌟 <b>DAILY MEGA JACKPOT</b>"
-        note = "Only one winner for this special event today!"
+        note = "This group has one special jackpot today!"
     else:
-        title = "📦 <b>HOURLY BINGO COIN DROP</b>"
-        note = "A new automatic event drops every hour. Win up to 2,000 coins!"
+        title = "🎯 <b>6-HOUR BINGO COIN CHALLENGE</b>"
+        note = "Each group has its own secret number and event!"
     text = (
         f"{title}\n\n"
         "Guess the secret 3-digit number to win Bingo Coins.\n\n"
@@ -1485,7 +1485,8 @@ async def _broadcast_number_event(application: Application, event: dict):
         f"<i>{note}</i>\n\n"
         "🏁 First person to guess correctly wins!"
     )
-    for chat_id in await db.get_all_group_chat_ids():
+    chat_id = int(event.get("group_id", 0) or 0)
+    if chat_id:
         try:
             await application.bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
         except Exception as exc:
@@ -1493,41 +1494,44 @@ async def _broadcast_number_event(application: Application, event: dict):
 
 
 async def _economy_event_scheduler(application: Application):
-    """Hourly drops and one daily special; event records are persisted in MongoDB."""
+    """Create separate 6-hour and daily jackpot events for every registered group."""
+    import hashlib
     while True:
         now = datetime.now(timezone.utc)
-        hour_key = now.strftime("%Y%m%d%H")
-        hourly_id = f"hourly:{hour_key}"
-        hourly = await db.start_number_event(
-            hourly_id, random.randint(500, 2000), "hourly",
-            random.randint(100, 999), now + timedelta(minutes=60),
-        )
-        # Only broadcast if this event was created for the first time.
-        created_at = hourly.get("created_at") if hourly else None
-        if created_at and created_at.tzinfo is None:
-            created_at = created_at.replace(tzinfo=timezone.utc)
-        if hourly and created_at and (now - created_at).total_seconds() < 8:
-            await _broadcast_number_event(application, hourly)
+        groups = await db.get_all_group_chat_ids()
+        # Fixed six-hour UTC windows; each group gets its own secret number and winner.
+        slot = int(now.timestamp() // (6 * 60 * 60))
+        slot_start = datetime.fromtimestamp(slot * 6 * 60 * 60, timezone.utc)
+        for chat_id in groups:
+            try:
+                event_id = f"six-hour:{chat_id}:{slot}"
+                event = await db.start_number_event(
+                    event_id, 5000, "six_hour", random.randint(100, 999),
+                    slot_start + timedelta(hours=6), group_id=int(chat_id),
+                )
+                created_at = event.get("created_at") if event else None
+                if created_at and created_at.tzinfo is None:
+                    created_at = created_at.replace(tzinfo=timezone.utc)
+                if event and created_at and (now - created_at).total_seconds() < 8:
+                    await _broadcast_number_event(application, event)
 
-        day_key = now.strftime("%Y%m%d")
-        daily_id = f"daily-special:{day_key}"
-        # Random daily launch time, deterministic for this date so restarts don't reroll it.
-        import hashlib
-        launch_minute = int(hashlib.sha256(day_key.encode()).hexdigest()[:8], 16) % 1440
-        launch_at = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(minutes=launch_minute)
-        daily_doc = await db._col("number_events").find_one({"_id": daily_id})
-        if now >= launch_at and not daily_doc:
-            special = await db.start_number_event(
-                daily_id, 10000, "daily_special", random.randint(100, 999),
-                now + timedelta(minutes=60),
-            )
-            if special:
-                await _broadcast_number_event(application, special)
-        # Sleep until the next UTC hour, checking daily launch without tight polling.
-        now = datetime.now(timezone.utc)
-        next_hour = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
-        await asyncio.sleep(max(30, min(300, (next_hour - now).total_seconds())))
-
+                day_key = now.strftime("%Y%m%d")
+                digest = hashlib.sha256(f"{day_key}:{chat_id}".encode()).hexdigest()
+                launch_minute = int(digest[:8], 16) % 1440
+                launch_at = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(minutes=launch_minute)
+                daily_id = f"daily-special:{chat_id}:{day_key}"
+                daily_doc = await db._col("number_events").find_one({"_id": daily_id})
+                if now >= launch_at and not daily_doc:
+                    special = await db.start_number_event(
+                        daily_id, 20000, "daily_special", random.randint(100, 999),
+                        now + timedelta(minutes=60), group_id=int(chat_id),
+                    )
+                    if special:
+                        await _broadcast_number_event(application, special)
+            except Exception:
+                logger.exception("Failed to schedule economy events for group %s", chat_id)
+        # Check every 30 seconds so each group's randomized daily launch is timely.
+        await asyncio.sleep(30)
 
 async def post_init(application: Application):
     for attempt in range(1, 6):
